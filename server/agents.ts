@@ -17,7 +17,8 @@ export interface Directory {
   list(): Promise<AgentInfo[]>;
   /** A fresh read of one agent; null when it is gone. */
   fresh(id: string): Promise<AgentInfo | null>;
-  send(id: string, text: string): Promise<void>;
+  /** Sends a prompt. Resolves false when the agent started a turn meanwhile and the host skipped it (nothing was sent). */
+  send(id: string, text: string): Promise<boolean | void>;
 }
 
 export interface LabelRule {
@@ -126,9 +127,25 @@ export class PaseoDirectory implements Directory {
     }
   }
 
-  async send(id: string, text: string): Promise<void> {
-    // Never "interrupt": mail waits for a running agent.
-    await this.api().agents.ref(id).send(text, { activeTurnBehavior: "steer" });
+  /** Hosts with the fork's `activeTurnSkip` send only to an idle agent; others reject the unknown value and get "steer". */
+  private skipSupported: boolean | null = null;
+
+  async send(id: string, text: string): Promise<boolean> {
+    const ref = this.api().agents.ref(id);
+    if (this.skipSupported !== false) {
+      try {
+        const result = (await ref.send(text, { activeTurnBehavior: "skip" } as never)) as { skipped?: boolean } | void;
+        this.skipSupported = true;
+        return !(result && typeof result === "object" && result.skipped === true);
+      } catch (error) {
+        // A running agent is not an error with "skip" (it answers skipped); a rejected value means the host lacks it.
+        if (this.skipSupported === true || !/activeTurnBehavior|skip|invalid|enum/i.test(String((error as Error)?.message ?? error))) throw error;
+        this.skipSupported = false;
+      }
+    }
+    // Never "interrupt": mail waits for a running agent. "steer" at worst joins a turn that just started.
+    await ref.send(text, { activeTurnBehavior: "steer" });
+    return true;
   }
 
   invalidate(): void {

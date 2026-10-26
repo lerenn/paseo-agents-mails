@@ -22,6 +22,8 @@ export const agent = (id: string, o: Partial<AgentInfo> = {}): AgentInfo => ({
 export class FakeDirectory implements Directory {
   sent: { id: string; text: string }[] = [];
   failSend = false;
+  /** Pretend the host skipped the send because the agent started a turn. */
+  skipSend = false;
   constructor(public agents: AgentInfo[]) {}
   async list() {
     return this.agents.filter((a) => !a.archived);
@@ -31,7 +33,9 @@ export class FakeDirectory implements Directory {
   }
   async send(id: string, text: string) {
     if (this.failSend) throw new Error("send failed");
+    if (this.skipSend) return false;
     this.sent.push({ id, text });
+    return true;
   }
 }
 

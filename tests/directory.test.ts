@@ -39,3 +39,40 @@ describe("PaseoDirectory (regression: status read from the right place)", () => 
     expect(await fake(snapshot({ archivedAt: "2026-10-25T00:00:00Z" })).dir.fresh("a1")).toBeNull();
   });
 });
+
+describe("PaseoDirectory.send uses the fork's skip when the host has it", () => {
+  const rig = (behavior: (opts: any) => unknown) => {
+    const calls: any[] = [];
+    const paseo = { agents: { list: async () => ({ entries: [] }), ref: () => ({ refresh: async () => null, send: async (_t: string, opts: any) => (calls.push(opts), behavior(opts)) }) } } as unknown as AgentsMailPaseo;
+    return { dir: new PaseoDirectory(() => paseo), calls };
+  };
+
+  it("asks for skip first and reports delivered", async () => {
+    const { dir, calls } = rig(() => undefined);
+    expect(await dir.send("a", "hi")).toBe(true);
+    expect(calls).toEqual([{ activeTurnBehavior: "skip" }]);
+  });
+
+  it("reports not delivered when the host says the agent is running", async () => {
+    const { dir } = rig(() => ({ skipped: true }));
+    expect(await dir.send("a", "hi")).toBe(false);
+  });
+
+  it("falls back to steer, once and for good, on a host that rejects the value; never interrupt", async () => {
+    const { dir, calls } = rig((o) => {
+      if (o.activeTurnBehavior === "skip") throw new Error("Invalid enum value for activeTurnBehavior");
+    });
+    expect(await dir.send("a", "1")).toBe(true);
+    expect(await dir.send("a", "2")).toBe(true);
+    expect(calls.map((c) => c.activeTurnBehavior)).toEqual(["skip", "steer", "steer"]);
+    expect(calls.some((c) => c.activeTurnBehavior === "interrupt")).toBe(false);
+  });
+
+  it("does not hide a real failure behind the fallback", async () => {
+    const { dir, calls } = rig(() => {
+      throw new Error("agent not found");
+    });
+    await expect(dir.send("a", "x")).rejects.toThrow(/not found/);
+    expect(calls).toHaveLength(1);
+  });
+});

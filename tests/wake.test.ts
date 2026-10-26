@@ -92,6 +92,19 @@ describe("wake", () => {
     expect(t.store.list(["agent:bbbbbbbb-2"]).every((m) => m.wakes <= 3)).toBe(true);
   });
 
+  it("does not count a send the host skipped (the agent started a turn meanwhile) as a wake, and tries again", async () => {
+    const { t, wake, send } = rig();
+    await send();
+    t.clock.now += 30_000;
+    t.directory.skipSend = true;
+    expect(await wake.sweep()).toEqual([]);
+    expect(t.store.list(["agent:bbbbbbbb-2"])[0].wakes).toBe(0);
+    t.directory.skipSend = false;
+    // No min-gap or backoff was started by the skipped attempt: the next sweep wakes at once.
+    expect(await wake.sweep()).toEqual(["bbbbbbbb-2"]);
+    expect(t.directory.sent).toHaveLength(1);
+  });
+
   it("keeps the mail unread when the send fails, and backs off", async () => {
     const { t, wake, send } = rig();
     await send();
