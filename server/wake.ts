@@ -16,7 +16,8 @@ export interface WakePorts {
   pending: () => Promise<{ agentId: string; mails: Mail[] }[]>;
   /** A fresh read of the agent. */
   fresh: (agentId: string) => Promise<AgentInfo | null>;
-  send: (agentId: string, text: string) => Promise<void>;
+  /** False when the host skipped the send because the agent was running (nothing delivered). */
+  send: (agentId: string, text: string) => Promise<boolean | void>;
   /** Whether the agent has the mail tools (its capability is bound). */
   hasTools: (agentId: string) => boolean;
   /** True once the host has delivered a prompt through `agent.prompt`, so injection works on it. */
@@ -111,10 +112,13 @@ export class WakeEngine {
       const agent = await this.p.fresh(agentId);
       if (!agent || !wakeable(agent, s.wakeClosedAgents)) return false;
       const text = this.text(agent, mails, s, now);
-      this.globalWakes.push(now);
-      this.lastWakeAt.set(agentId, now);
       try {
-        await this.p.send(agentId, text.body);
+        const delivered = await this.p.send(agentId, text.body);
+        // The agent started a turn between the check and the send: nothing went out, so this is not a wake. The next
+        // turn_ended or sweep tries again.
+        if (delivered === false) return false;
+        this.globalWakes.push(now);
+        this.lastWakeAt.set(agentId, now);
       } catch (error) {
         const count = (this.failures.get(agentId)?.count ?? 0) + 1;
         this.failures.set(agentId, { count, until: now + FAIL_BACKOFF_MS[Math.min(count, FAIL_BACKOFF_MS.length) - 1] });
