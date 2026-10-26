@@ -33,7 +33,7 @@ export const mailboxMailsRpc = defineRpc({
 
 /** Marks mails read on purpose: the agent will no longer be woken for them or shown them. */
 export const markReadRpc = defineRpc({
-  name: "mail.markRead",
+  name: "mail.read",
   input: z.object({ mailbox: z.string(), ids: z.array(z.string()).optional() }),
   output: z.object({ marked: z.number() }),
 });
