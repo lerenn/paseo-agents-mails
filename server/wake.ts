@@ -138,11 +138,14 @@ export class WakeEngine {
   }
 
   /**
-   * Injection carries the content when the host supports it; agents with the tools get a notice; agents
-   * without them get the mail inline (marked read), so they can be mailed with nothing installed on their side.
+   * Agents with the tools get a bare wake when injection carries the content, else a notice; agents without them always get
+   * the mail inline (marked read), so they can be mailed with nothing installed on their side.
    */
   private text(agent: AgentInfo, mails: Mail[], s: AgentsMailSettings, now: number): { body: string; inlineIds: string[] } {
-    if (this.p.injectionLive() && this.p.injectEnabledFor(agent)) return { body: "[Agents Mail] You have new mail.", inlineIds: [] };
+    // An agent without the mail tools (created before Agents Mail) gets the mail inline whatever the host can do: if an
+    // injection fails it has no tool to fall back on, and the mail would sit unread. Inline marks it read, so the
+    // hook finds nothing left to add.
+    if (this.p.hasTools(agent.id) && this.p.injectionLive() && this.p.injectEnabledFor(agent)) return { body: "[Agents Mail] You have new mail.", inlineIds: [] };
     if (this.p.hasTools(agent.id)) {
       const names = [...new Set(mails.map((m) => cleanName(m.from.name)))].slice(0, 5).join(", ");
       return { body: `[Agents Mail] You have ${mails.length} unread mail${mails.length > 1 ? "s" : ""} (from: ${names}). Call mail_list, then mail_read.`, inlineIds: [] };
