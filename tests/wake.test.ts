@@ -129,12 +129,24 @@ describe("wake", () => {
     expect(t.store.unreadCount("agent:bbbbbbbb-2")).toBe(0);
   });
 
-  it("sends a minimal wake once injection is live", async () => {
-    const { t, wake, send } = rig({ live: true, tools: false });
+  it("sends a minimal wake once injection is live, to an agent that has the mail tools", async () => {
+    const { t, wake, send } = rig({ live: true, tools: true });
     await send("x", "body text");
     t.clock.now += 30_000;
     await wake.sweep();
     expect(t.directory.sent[0].text).toBe("[Agents Mail] You have new mail.");
+    expect(t.store.unreadCount("agent:bbbbbbbb-2")).toBe(1); // the injection, not the wake, delivers and marks it
+  });
+
+  it("still gives an agent WITHOUT the tools the mail inline when injection is live (regression: a bare wake stranded it)", async () => {
+    const { t, wake, send } = rig({ live: true, tools: false });
+    await send("PR opened", "see #7");
+    t.clock.now += 30_000;
+    await wake.sweep();
+    const text = t.directory.sent[0].text;
+    expect(text).toMatch(/untrusted="true"/);
+    expect(text).toMatch(/see #7/);
+    expect(t.store.unreadCount("agent:bbbbbbbb-2")).toBe(0);
   });
 
   it("holds back wakes beyond the per-minute budget", async () => {
