@@ -69,20 +69,14 @@ export function injectTools(request: CreateRequest, o: { url: string; capability
   };
 }
 
-type Block = { type: string; text?: string; [k: string]: unknown };
+/** The host drops a `prepend` longer than this (fork `agent.prompt` hook), so we never send one. */
+export const MAX_PREPEND = 16_000;
 
 /**
- * Prepends text to a prompt in the shapes the host may hand over (`agent.prompt` is a fork hook, not in the
- * published API): a plain string, `{ input: { type: "message", content: [...] } }`, or `{ text }`.
- * Returns null for a prompt it does not recognise (commands, empty): those are left alone.
+ * Adds our block to the `prepend` earlier plugins may have set, never overwriting it. Returns null when the
+ * result would be over the host's limit: then nothing is injected and the mail stays unread.
  */
-export function prependToPrompt<T>(prompt: T, block: string): T | null {
-  if (typeof prompt === "string") return `${block}\n\n${prompt}` as T;
-  const p = prompt as { input?: { type?: string; content?: Block[] }; text?: string } | null;
-  if (!p || typeof p !== "object") return null;
-  if (p.input?.type === "message" && Array.isArray(p.input.content)) {
-    return { ...p, input: { ...p.input, content: [{ type: "text", text: `${block}\n\n` }, ...p.input.content] } } as T;
-  }
-  if (typeof p.text === "string") return { ...p, text: `${block}\n\n${p.text}` } as T;
-  return null;
+export function composePrepend(existing: string | undefined, block: string): string | null {
+  const out = existing ? `${existing}\n\n${block}` : block;
+  return out.length <= MAX_PREPEND ? out : null;
 }

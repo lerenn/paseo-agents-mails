@@ -8,7 +8,7 @@ import { adminApi, newAdminToken } from "./server/admin";
 import { holders } from "./server/address";
 import { PaseoDirectory, matchesAny, parseLabelRules, type AgentsMailPaseo } from "./server/agents";
 import { MailHttp } from "./server/http";
-import { CAPABILITY_ENV, createContext, injectTools, milestoneText, prependToPrompt, wantsTools } from "./server/inject";
+import { CAPABILITY_ENV, createContext, injectTools, milestoneText, MAX_PREPEND, composePrepend, wantsTools } from "./server/inject";
 import { McpServer } from "./server/mcp";
 import { MailService } from "./server/service";
 import { MailStore } from "./server/store";
@@ -17,6 +17,18 @@ import { USAGE, mailTools, toolNames } from "./server/tools";
 import { WakeEngine } from "./server/wake";
 
 const DEFAULT_PORT = 47843;
+
+/** What the fork's `agent.prompt` hook hands over (the final contract); only `prepend` is honoured on return. */
+interface PromptRequest {
+  agentId: string;
+  labels: Record<string, string>;
+  parentAgentId: string | null;
+  prompt: string;
+  source: "user" | "agent";
+  sourceAgentId: string | null;
+  isFirstPrompt: boolean;
+  prepend?: string;
+}
 const paseoHome = process.env.PASEO_HOME ?? path.join(homedir(), ".paseo");
 const dataDir = path.join(paseoHome, "plugin-data", "agents-mail");
 /** Where other plugins find the admin API. */
@@ -182,30 +194,29 @@ export default function contribute(server: PluginServerContext) {
     if (capability) tokens.bind(capability, request.agentId);
   });
 
-  // Fork hook: runs before a prompt reaches the agent. A host without it ignores or refuses the registration.
+  // Fork hook (feature flag pluginPromptHook): runs before a prompt reaches the agent and may set `prepend`, which the
+  // host puts in front of the prompt. A host without it ignores or refuses the registration, and injection falls back
+  // to session start (MCP instructions) and wakes.
   let removePrompt: () => void = () => {};
   try {
-    const before = server.before as unknown as (name: string, handler: (input: { request: any }, ctx: any) => unknown) => (() => void) | undefined;
+    const before = server.before as unknown as (name: string, handler: (input: { request: PromptRequest }, ctx: any) => unknown) => (() => void) | undefined;
     removePrompt =
       before.call(server, "agent.prompt", async ({ request }, ctx) => {
         capture(ctx);
         promptHookLive = true;
         try {
-          const agentId = request?.agentId as string | undefined;
-          if (!agentId || !latest.enabled || !latest.injectEnabled) return;
-          // Check the prompt shape first: mail is marked read only when it is really added.
-          if (prependToPrompt(request.prompt, "x") === null) return;
-          const agent = (await directory.list()).find((a) => a.id === agentId);
-          if (!agent || !injectAllowed(agent)) return;
-          const block = await service.injection(agentId);
+          if (!request?.agentId || !latest.enabled || !latest.injectEnabled) return;
+          if (!injectAllowed({ labels: request.labels ?? {}, parentAgentId: request.parentAgentId ?? null })) return;
+          const room = MAX_PREPEND - (request.prepend ? request.prepend.length + 2 : 0);
+          const block = await service.injection(request.agentId, "inject", Math.max(256, room - 300));
           if (!block) return;
-          return { ...request, prompt: prependToPrompt(request.prompt, block.text) };
+          return { ...request, prepend: composePrepend(request.prepend, block.text) ?? request.prepend };
         } catch (error) {
           console.error("agents-mail: injection failed", error);
         }
       }) ?? (() => {});
   } catch {
-    // No agent.prompt hook on this host: injection falls back to session start (MCP instructions) and wakes.
+    // No agent.prompt hook on this host.
   }
 
   const removeTurnEnded = server.on("agent.turn_ended", ({ agent }, ctx) => {

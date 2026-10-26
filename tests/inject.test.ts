@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { milestoneText, prependToPrompt, wantsTools, injectTools } from "../server/inject";
+import { milestoneText, composePrepend, MAX_PREPEND, wantsTools, injectTools } from "../server/inject";
 import { cutBytes, renderBlock, cleanName } from "../server/render";
 import { parseAliases } from "../server/agents";
 import { agent, setup } from "../server/testing";
@@ -45,15 +45,11 @@ describe("injection service", () => {
   });
 });
 
-describe("prompt shapes", () => {
-  it("prepends to strings, message content and text prompts; leaves commands alone", () => {
-    expect(prependToPrompt("go", "B")).toBe("B\n\ngo");
-    expect(prependToPrompt({ input: { type: "message", content: [{ type: "text", text: "go" }] }, delivery: "auto" }, "B")).toEqual({
-      input: { type: "message", content: [{ type: "text", text: "B\n\n" }, { type: "text", text: "go" }] },
-      delivery: "auto",
-    });
-    expect(prependToPrompt({ text: "go" }, "B")).toEqual({ text: "B\n\ngo" });
-    expect(prependToPrompt({ input: { type: "command", name: "x", arguments: "" } }, "B")).toBeNull();
+describe("composePrepend", () => {
+  it("appends to what earlier plugins set, never overwrites, and refuses to pass the host limit", () => {
+    expect(composePrepend(undefined, "B")).toBe("B");
+    expect(composePrepend("earlier", "B")).toBe("earlier\n\nB");
+    expect(composePrepend("x".repeat(MAX_PREPEND), "B")).toBeNull();
   });
 });
 

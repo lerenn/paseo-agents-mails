@@ -145,12 +145,12 @@ export class MailService {
    * Unread mail for an agent as an injection block; mails shown whole are marked read, cut ones keep
    * their unread state and are not injected again. Null when there is nothing new to show.
    */
-  async injection(agentId: string, via: ReadVia = "inject"): Promise<Rendered | null> {
+  async injection(agentId: string, via: ReadVia = "inject", maxBytes?: number): Promise<Rendered | null> {
     const s = this.p.settings();
     const now = this.p.now();
     const boxes = await this.mailboxes(agentId);
     const fresh = this.p.store.list(boxes, { unreadOnly: true }).filter((m) => m.injectedAt === null).sort((a, b) => a.createdAt - b.createdAt);
-    const rendered = renderBlock(fresh, { perMailBytes: s.injectPerMailBytes, totalBytes: s.injectMaxBytes, now });
+    const rendered = renderBlock(fresh, { perMailBytes: s.injectPerMailBytes, totalBytes: Math.min(s.injectMaxBytes, maxBytes ?? Infinity), now });
     if (!rendered) return null;
     this.p.store.markInjected([...rendered.whole, ...rendered.partial], now);
     for (const box of boxes) this.p.store.markRead([box], rendered.whole, via, now);
