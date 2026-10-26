@@ -6,14 +6,23 @@ const snapshot = (o: Record<string, unknown> = {}) => ({ id: "a1", title: "Coder
 
 function fake(agent: Record<string, unknown>) {
   const sent: string[] = [];
+  const listed: unknown[] = [];
   const paseo: AgentsMailPaseo = {
     agents: {
-      list: async () => ({ entries: [{ agent }, { agent: snapshot({ id: "gone", archivedAt: "2026-10-25T00:00:00Z" }) }] }),
+      list: async (options: unknown) => (listed.push(options), { entries: [{ agent }, { agent: snapshot({ id: "gone", archivedAt: "2026-10-25T00:00:00Z" }) }] }),
       ref: () => ({ refresh: async () => ({ agent, project: null }), send: async (t: string) => void sent.push(t) }),
     },
   };
-  return { dir: new PaseoDirectory(() => paseo), sent };
+  return { dir: new PaseoDirectory(() => paseo), sent, listed };
 }
+
+describe("PaseoDirectory lists background workspaces (regression: @assistant did not resolve)", () => {
+  it("asks for agents in background workspaces too, since the Assistant lives in one", async () => {
+    const { dir, listed } = fake(snapshot({ labels: { "paseo.assistant": "1" } }));
+    await dir.list();
+    expect(listed[0]).toEqual({ filter: { includeArchived: false, includeBackground: true } });
+  });
+});
 
 describe("PaseoDirectory (regression: status read from the right place)", () => {
   it("reads status, title, labels and activity from list() entries and from a refresh() result", async () => {

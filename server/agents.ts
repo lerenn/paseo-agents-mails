@@ -106,7 +106,8 @@ export class PaseoDirectory implements Directory {
 
   async list(): Promise<AgentInfo[]> {
     if (this.cache && this.now() - this.cache.at < LIST_TTL_MS) return this.cache.agents;
-    const { entries } = await this.api().agents.list({ filter: { includeArchived: false } });
+    // Background workspaces are left out by default; the Assistant lives in one, and @assistant must resolve to it.
+    const { entries } = await this.api().agents.list({ filter: { includeArchived: false, includeBackground: true } });
     const agents = entries.flatMap((e) => {
       const info = fromSnapshot((e as { agent?: unknown }).agent);
       return info && !info.archived ? [info] : [];
