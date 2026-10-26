@@ -1,0 +1,243 @@
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
+import type { PluginServerContext } from "@getpaseo/plugin/server";
+import { API_VERSION } from "./shared/mail";
+import { agentsMailSettings, settingsSchema } from "./shared/settings";
+import { adminApi, newAdminToken } from "./server/admin";
+import { holders } from "./server/address";
+import { PaseoDirectory, matchesAny, parseLabelRules, type AgentsMailPaseo } from "./server/agents";
+import { MailHttp } from "./server/http";
+import { CAPABILITY_ENV, createContext, injectTools, milestoneText, prependToPrompt, wantsTools } from "./server/inject";
+import { McpServer } from "./server/mcp";
+import { MailService } from "./server/service";
+import { MailStore } from "./server/store";
+import { CapabilityStore } from "./server/tokens";
+import { USAGE, mailTools, toolNames } from "./server/tools";
+import { WakeEngine } from "./server/wake";
+
+const DEFAULT_PORT = 47843;
+const paseoHome = process.env.PASEO_HOME ?? path.join(homedir(), ".paseo");
+const dataDir = path.join(paseoHome, "plugin-data", "agents-mail");
+/** Where other plugins find the admin API. */
+const endpointFile = process.env.AGENTS_MAIL_ENDPOINT ?? path.join(paseoHome, "agents-mail", "endpoint.json");
+
+type Settings = ReturnType<typeof settingsSchema.parse>;
+
+function readOrCreateToken(file: string): string {
+  try {
+    const existing = readFileSync(file, "utf8").trim();
+    if (existing) return existing;
+  } catch {
+    // First start.
+  }
+  const token = newAdminToken();
+  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  writeFileSync(file, token, { mode: 0o600 });
+  chmodSync(file, 0o600);
+  return token;
+}
+
+function writeEndpoint(file: string, url: string, token: string): void {
+  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const temp = `${file}.${process.pid}.tmp`;
+  writeFileSync(temp, JSON.stringify({ url, token, apiVersion: API_VERSION }), { mode: 0o600 });
+  chmodSync(temp, 0o600);
+  renameSync(temp, file);
+}
+
+export default function contribute(server: PluginServerContext) {
+  const settings = server.registerSettings(agentsMailSettings);
+  let latest: Settings = settingsSchema.parse({});
+  const apply = (state: Awaited<ReturnType<typeof settings.read>>) => {
+    latest = state.status === "ready" ? state.values : settingsSchema.parse({});
+  };
+  const ready = settings.read().then(apply);
+  const unsubscribeSettings = settings.subscribe(apply);
+
+  const store = new MailStore(process.env.AGENTS_MAIL_JOURNAL ?? path.join(dataDir, "mail.jsonl"));
+  const tokens = new CapabilityStore(process.env.AGENTS_MAIL_CAPABILITIES ?? path.join(dataDir, "capabilities.json"));
+  const adminToken = readOrCreateToken(process.env.AGENTS_MAIL_ADMIN_TOKEN ?? path.join(dataDir, "admin-token"));
+
+  // The Paseo API only reaches a plugin through hook and RPC contexts; keep the first one seen.
+  let paseo: AgentsMailPaseo | null = null;
+  const capture = (ctx: { paseo: unknown } | undefined) => {
+    if (ctx?.paseo && !paseo) paseo = ctx.paseo as AgentsMailPaseo;
+  };
+  const directory = new PaseoDirectory(() => paseo);
+
+  /** True once the host has handed a prompt to our `agent.prompt` hook: until then it may not exist. */
+  let promptHookLive = false;
+
+  const service: MailService = new MailService({
+    store,
+    directory,
+    settings: () => latest,
+    now: Date.now,
+    onMail: (mail, holderId) => {
+      wake.notify(holderId, mail.createdAt);
+    },
+  });
+
+  const injectAllowed = (agent: { labels: Record<string, string>; parentAgentId: string | null }): boolean =>
+    latest.enabled && latest.injectEnabled && !agent.parentAgentId && !matchesAny(agent.labels, parseLabelRules(latest.injectExcludeLabels));
+
+  const wake = new WakeEngine({
+    now: Date.now,
+    settings: () => latest,
+    async pending() {
+      const aliases = service.aliases();
+      const live = await directory.list();
+      const byAgent = new Map<string, import("./shared/mail").Mail[]>();
+      for (const box of store.mailboxesWithUnread()) {
+        let target: string | undefined;
+        if (box.startsWith("agent:")) target = box.slice(6);
+        else {
+          const alias = aliases.find((a) => a.name === box.slice(6));
+          target = alias ? holders(live, alias)[0]?.id : undefined;
+        }
+        if (!target) continue;
+        byAgent.set(target, [...(byAgent.get(target) ?? []), ...store.list([box], { unreadOnly: true })]);
+      }
+      return [...byAgent].map(([agentId, mails]) => ({ agentId, mails: mails.sort((a, b) => a.createdAt - b.createdAt) }));
+    },
+    fresh: (id) => directory.fresh(id),
+    send: (id, text) => directory.send(id, text),
+    hasTools: (id) => tokens.hasAgent(id),
+    injectionLive: () => promptHookLive,
+    injectEnabledFor: (agent) => injectAllowed(agent),
+    recordWake: (ids, at) => store.recordWake(ids, at),
+    markInline: (agentId, ids, at) => {
+      void service.mailboxes(agentId).then((boxes) => store.markRead(boxes, ids, "inline", at));
+    },
+  });
+  wake.start();
+
+  const instructionsFor = async (agentId: string | undefined): Promise<string> => {
+    if (!agentId || !latest.enabled || !latest.injectEnabled) return USAGE;
+    const agent = (await directory.list()).find((a) => a.id === agentId);
+    if (!agent || !injectAllowed(agent)) return USAGE;
+    const block = await service.injection(agentId);
+    return block ? `${USAGE}\n\n${block.text}` : USAGE;
+  };
+
+  const nameOf = async (agentId: string, hint?: string) => {
+    if (hint) return hint;
+    const found = (await directory.list().catch(() => [])).find((a) => a.id === agentId);
+    return found?.title || agentId;
+  };
+
+  let url: string | null = null;
+  const http = new MailHttp({
+    tokens,
+    mcp: new McpServer(mailTools),
+    context: (capability) => ({ service, nameOf, instructions: () => instructionsFor(capability.agentId) }),
+    admin: adminApi(service, store, () => latest.humanName),
+    adminToken: () => adminToken,
+  });
+  const port = Number(process.env.PASEO_AGENTS_MAIL_PORT ?? DEFAULT_PORT);
+  const started = http.start(port).then(
+    (u) => {
+      url = u;
+      writeEndpoint(endpointFile, u, adminToken);
+    },
+    (err: Error) => {
+      console.error(`agents-mail: cannot listen on 127.0.0.1:${port}: ${err.message}. Set PASEO_AGENTS_MAIL_PORT on the daemon.`);
+    },
+  );
+
+  const purge = () => {
+    try {
+      const n = service.purge();
+      if (n) console.log(`agents-mail: purged ${n} mails`);
+    } catch (error) {
+      console.error("agents-mail: purge failed", error);
+    }
+  };
+  void ready.then(purge);
+  const purgeTimer = setInterval(purge, 24 * 3_600_000);
+
+  const removeCreate = server.before("agent.create", async ({ request }, ctx) => {
+    capture(ctx);
+    // Daemons without the create context give no labels or parent: inject nothing rather than everywhere.
+    const agent = createContext(request);
+    if (!agent) return;
+    await ready;
+    if (!wantsTools(agent, request.env, latest)) return;
+    await started;
+    // Without the endpoint the agent just does not get the tools; creating it must not fail.
+    if (!url) return;
+    let milestone: string | null = null;
+    try {
+      milestone = milestoneText(agent, latest, await directory.list(), service.aliases());
+    } catch {
+      milestone = null;
+    }
+    const capability = tokens.create({ role: "agent", name: request.config.title ?? undefined });
+    return injectTools(request, { url, capability, tools: toolNames(), milestone });
+  });
+  const removeOpen = server.before("agent.session_open", ({ request }, ctx) => {
+    capture(ctx);
+    const capability = request.env[CAPABILITY_ENV];
+    if (capability) tokens.bind(capability, request.agentId);
+  });
+
+  // Fork hook: runs before a prompt reaches the agent. A host without it ignores or refuses the registration.
+  let removePrompt: () => void = () => {};
+  try {
+    const before = server.before as unknown as (name: string, handler: (input: { request: any }, ctx: any) => unknown) => (() => void) | undefined;
+    removePrompt =
+      before.call(server, "agent.prompt", async ({ request }, ctx) => {
+        capture(ctx);
+        promptHookLive = true;
+        try {
+          const agentId = request?.agentId as string | undefined;
+          if (!agentId || !latest.enabled || !latest.injectEnabled) return;
+          // Check the prompt shape first: mail is marked read only when it is really added.
+          if (prependToPrompt(request.prompt, "x") === null) return;
+          const agent = (await directory.list()).find((a) => a.id === agentId);
+          if (!agent || !injectAllowed(agent)) return;
+          const block = await service.injection(agentId);
+          if (!block) return;
+          return { ...request, prompt: prependToPrompt(request.prompt, block.text) };
+        } catch (error) {
+          console.error("agents-mail: injection failed", error);
+        }
+      }) ?? (() => {});
+  } catch {
+    // No agent.prompt hook on this host: injection falls back to session start (MCP instructions) and wakes.
+  }
+
+  const removeTurnEnded = server.on("agent.turn_ended", ({ agent }, ctx) => {
+    capture(ctx);
+    // Give the status a moment to settle to idle, then wake if mail is waiting.
+    setTimeout(() => void wake.poke(agent.id).catch((e) => console.error("agents-mail: poke failed", e)), 1500);
+  });
+  const removeCreated = server.on("agent.created", (_event, ctx) => {
+    capture(ctx);
+    directory.invalidate();
+  });
+  const removeArchived = server.on("agent.archived", ({ agent }, ctx) => {
+    capture(ctx);
+    tokens.revokeAgent(agent.id);
+    directory.invalidate();
+  });
+
+  return () => {
+    removeCreate();
+    removeOpen();
+    removePrompt();
+    removeTurnEnded();
+    removeCreated();
+    removeArchived();
+    unsubscribeSettings();
+    clearInterval(purgeTimer);
+    wake.stop();
+    try {
+      rmSync(endpointFile, { force: true });
+    } catch {
+      // Best effort.
+    }
+    void http.stop();
+  };
+}

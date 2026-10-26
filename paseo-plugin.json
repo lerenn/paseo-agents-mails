@@ -1,0 +1,7 @@
+{
+  "id": "agents-mail",
+  "name": "Agents Mail",
+  "description": "A mailbox for every agent: agents mail each other, idle agents are woken, unread mail is injected into context.",
+  "requirements": { "paseo": ">=0.13.0-beta.1" },
+  "build": [["npm", "ci"]]
+}

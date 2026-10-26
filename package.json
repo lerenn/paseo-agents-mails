@@ -1,0 +1,20 @@
+{
+  "name": "paseo-agents-mail",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A mailbox for every agent on a Paseo daemon: agents mail each other, idle agents are woken, unread mail is injected into context.",
+  "license": "MIT",
+  "files": ["paseo-plugin.json", "OVERVIEW.md", "index.server.ts", "server/", "shared/", "LICENSE"],
+  "scripts": {
+    "build": "tsc --noEmit -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@getpaseo/plugin": "0.13.0-beta.2",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.0",
+    "zod": "^4.4.3"
+  }
+}
