@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { settingsSchema } from "../shared/settings";
 
-type Handler = (input: { request: any }, ctx: any) => any;
+type Handler = (input: any, ctx: any) => any;
 
 /** Loads the real plugin entry against a fake server context, the way the daemon does. */
 async function load() {
@@ -18,9 +18,10 @@ async function load() {
     AGENTS_MAIL_ENDPOINT: path.join(dir, "endpoint.json"),
   });
   const befores = new Map<string, Handler>();
+  const handles = new Map<string, Handler>();
   const server: any = {
     registerSettings: () => ({ read: async () => ({ status: "ready", revision: "1", values: settingsSchema.parse({}) }), subscribe: () => () => {} }),
-    handle: () => {},
+    handle: (contract: { name: string }, h: Handler) => void handles.set(contract.name, h),
     before: (name: string, h: Handler) => (befores.set(name, h), () => {}),
     on: () => () => {},
   };
@@ -45,7 +46,7 @@ async function load() {
     const res = await fetch(`${endpoint!.url}${route}`, { method: body ? "POST" : "GET", headers: { authorization: `Bearer ${endpoint!.token}`, "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
     return { status: res.status, json: (await res.json()) as any };
   };
-  return { befores, ctx, endpoint: endpoint!, api, cleanup: cleanup as () => void };
+  return { befores, handles, ctx, endpoint: endpoint!, api, cleanup: cleanup as () => void };
 }
 
 let loaded: Awaited<ReturnType<typeof load>>;
@@ -93,5 +94,22 @@ describe("plugin entry", () => {
     await loaded.api("/api/mails", { to: "Coder B", subject: "x" });
     expect(await hook({ request: prompt({ parentAgentId: "p" }) }, loaded.ctx)).toBeUndefined();
     expect(await hook({ request: prompt({ agentId: "aaaaaaaa-1" }) }, loaded.ctx)).toBeUndefined();
+  });
+});
+
+describe("the human's mailbox in the plugin entry", () => {
+  it("an agent's mail to @user counts as the one badge, shows first, and wakes nobody; reading it clears it", async () => {
+    // Capture the Paseo API through a hook context first, as the daemon does.
+    await loaded.befores.get("agent.prompt")!({ request: prompt({ agentId: "nobody" }) }, loaded.ctx);
+    const sent = await loaded.api("/api/mails", { to: "@user", subject: "Report", body: "b", kind: "info", asAgent: { agentId: "aaaaaaaa-1", name: "Coder A" } });
+    expect(sent.status).toBe(200);
+    await loaded.api("/api/mails", { to: "Coder B", subject: "agent to agent", asAgent: { agentId: "aaaaaaaa-1", name: "Coder A" } });
+    const out = await loaded.handles.get("mail.mailboxes")!({}, loaded.ctx);
+    expect(out.unread).toBe(1); // only the mail addressed to the human
+    expect(out.mailboxes[0]).toMatchObject({ id: "human:user", kind: "human", unread: 1 });
+    expect(out.mailboxes.find((b: any) => b.id === "agent:bbbbbbbb-2").unread).toBe(1); // still there, just not a badge
+    const cleared = await loaded.handles.get("mail.read")!({ mailbox: "human:user" }, loaded.ctx);
+    expect(cleared.marked).toBe(1);
+    expect((await loaded.handles.get("mail.mailboxes")!({}, loaded.ctx)).unread).toBe(0);
   });
 });

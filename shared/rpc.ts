@@ -5,7 +5,7 @@ import { mailSchema } from "./mail";
 export const mailboxSummarySchema = z.object({
   /** `agent:<id>` or `alias:<name>`. */
   id: z.string(),
-  kind: z.enum(["agent", "alias"]),
+  kind: z.enum(["human", "agent", "alias"]),
   /** The agent's title as last seen on a mail to it, or `@alias`. */
   label: z.string(),
   agentId: z.string().nullable(),
@@ -17,7 +17,7 @@ export const mailboxSummarySchema = z.object({
 });
 export type MailboxSummary = z.output<typeof mailboxSummarySchema>;
 
-/** Every mailbox that holds mail or belongs to a live alias holder, with unread counts; `unread` is the sum. */
+/** Every mailbox that holds mail or belongs to a live alias holder, the human's first; `unread` is the human mailbox's unread count, the only badge. */
 export const mailboxesRpc = defineRpc({
   name: "mail.mailboxes",
   input: z.object({}),

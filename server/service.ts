@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { MAX_BODY_BYTES, MAX_KIND, MAX_SUBJECT, agentMailbox, type Mail, type ReadVia } from "../shared/mail";
+import { HUMAN_MAILBOX, MAX_BODY_BYTES, MAX_KIND, MAX_SUBJECT, agentMailbox, type Mail, type ReadVia } from "../shared/mail";
 import type { AgentsMailSettings } from "../shared/settings";
 import { resolveAddress, mailboxesOf, type Resolved } from "./address";
 import { parseAliases, type AgentInfo, type Alias, type Directory } from "./agents";
@@ -72,6 +72,8 @@ export class MailService {
     }
     const agents = await this.p.directory.list();
     const resolved = resolveAddress(input.to, agents, this.aliases(), senderAgent?.id ?? null);
+
+    if (resolved.mailbox === HUMAN_MAILBOX && sender.type === "human") throw new UsageError("@user is you: nobody to mail.");
 
     const parent = input.inReplyTo ? this.p.store.get(input.inReplyTo) : undefined;
     const id = randomUUID();

@@ -104,6 +104,8 @@ export default function contribute(server: PluginServerContext) {
       const live = await directory.list();
       const byAgent = new Map<string, import("./shared/mail").Mail[]>();
       for (const box of store.mailboxesWithUnread()) {
+        // The human's mailbox is read in the Mail screen: nobody is woken for it.
+        if (box.startsWith("human:")) continue;
         let target: string | undefined;
         if (box.startsWith("agent:")) target = box.slice(6);
         else {

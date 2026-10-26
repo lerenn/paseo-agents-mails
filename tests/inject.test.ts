@@ -81,3 +81,11 @@ describe("create hook helpers", () => {
     expect(out.env.PASEO_AGENTS_MAIL_CAPABILITY).toBe("cap");
   });
 });
+
+describe("the usage text names the human mailbox", () => {
+  it("tells agents to mail @user only for information, and to keep decisions and actions with the Assistant", async () => {
+    const { USAGE } = await import("../server/tools");
+    expect(USAGE).toContain("Mail @user only for information the human should read; decisions and actions still go through the Assistant.");
+    expect(USAGE).toContain("@user for the human");
+  });
+});

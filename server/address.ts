@@ -1,4 +1,4 @@
-import { agentMailbox, aliasMailbox } from "../shared/mail";
+import { HUMAN_MAILBOX, agentMailbox, aliasMailbox } from "../shared/mail";
 import { matchesRule, type AgentInfo, type Alias } from "./agents";
 
 export class AddressError extends Error {}
@@ -55,6 +55,8 @@ export function resolveAddress(to: string, agents: AgentInfo[], aliases: Alias[]
     return { mailbox: agentMailbox(a.id), agentId: a.id, holderId: a.id, display: a.title ?? a.id };
   };
 
+  // The human: always present, never woken (they read it in the Mail screen).
+  if (/^@(user|human)$/i.test(text)) return { mailbox: HUMAN_MAILBOX, holderId: null, display: "@user" };
   if (text.startsWith("@")) return viaAlias(text.slice(1));
 
   if (text.toLowerCase().startsWith("label:")) {

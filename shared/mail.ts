@@ -30,4 +30,6 @@ export type Mail = z.output<typeof mailSchema>;
 export type ReadVia = NonNullable<Mail["readVia"]>;
 
 export const agentMailbox = (agentId: string) => `agent:${agentId}`;
+/** The human's own mailbox, always there: agents mail it with `@user`, and only its unread count is a badge. */
+export const HUMAN_MAILBOX = "human:user";
 export const aliasMailbox = (name: string) => `alias:${name}`;
