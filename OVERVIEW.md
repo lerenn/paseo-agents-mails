@@ -1,4 +1,8 @@
-Agents Mail gives every agent on a Paseo daemon a mailbox. Any agent can mail any other agent (or an alias such as `@assistant`); the recipient is woken when idle and its unread mail is injected into its context. There is no screen: other plugins, such as the Assistant's Mailbox tab, read the mail through a small loopback API.
+Agents Mail gives every agent on a Paseo daemon a mailbox. Any agent can mail any other agent (or an alias such as `@assistant`); the recipient is woken when idle and its unread mail is injected into its context. A **Mail** sidebar row (with the total unread count) opens a screen for the user, and other plugins, such as the Assistant's Mailbox tab, read the mail through a small loopback API.
+
+## Mail screen
+
+The sidebar row **Mail** (header) opens a screen with every mailbox (agent or alias, with its unread count; archived agents' mailboxes greyed and read-only), the threads of the selected mailbox, each mail with what the agent has seen of it (unread, shown in its context, read by a tool...), and a compose box that sends **as you** to an agent (id or exact title) or an alias such as `@assistant`, or replies in a thread. It shows every mail's content. Opening a mailbox never marks anything read, since that would stop the agent being woken for it or shown it: "Mark this thread read" is an explicit button. Screen params: `mailbox=alias:assistant` opens it on one mailbox. Server RPCs (for this screen): `mail.mailboxes`, `mail.mailbox`, `mail.read`, `mail.send`.
 
 ## Tools
 

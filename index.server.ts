@@ -3,6 +3,8 @@ import { homedir } from "node:os";
 import path from "node:path";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { API_VERSION } from "./shared/mail";
+import { mailboxMailsRpc, mailboxesRpc, markReadRpc, sendRpc } from "./shared/rpc";
+import { summarize } from "./server/ui";
 import { agentsMailSettings, settingsSchema } from "./shared/settings";
 import { adminApi, newAdminToken } from "./server/admin";
 import { holders } from "./server/address";
@@ -187,6 +189,26 @@ export default function contribute(server: PluginServerContext) {
     }
     const capability = tokens.create({ role: "agent", name: request.config.title ?? undefined });
     return injectTools(request, { url, capability, tools: toolNames(), milestone });
+  });
+  // The Mail screen. It only reads: opening a mailbox never marks anything read, since that would stop the agent being
+  // woken for it or shown it.
+  server.handle(mailboxesRpc, async (_input, ctx) => {
+    capture(ctx);
+    const live = await directory.list().catch(() => null);
+    return summarize(store.all(), live, service.aliases());
+  });
+  server.handle(mailboxMailsRpc, async (input, ctx) => {
+    capture(ctx);
+    return { mails: store.list([input.mailbox]).sort((a, b) => a.createdAt - b.createdAt) };
+  });
+  server.handle(markReadRpc, async (input, ctx) => {
+    capture(ctx);
+    return { marked: store.markRead([input.mailbox], input.ids, "ui", Date.now()) };
+  });
+  server.handle(sendRpc, async (input, ctx) => {
+    capture(ctx);
+    const { mail, resolved } = await service.send({ type: "human", name: latest.humanName }, input);
+    return { id: mail.id, threadId: mail.threadId, to: resolved.display };
   });
   const removeOpen = server.before("agent.session_open", ({ request }, ctx) => {
     capture(ctx);
