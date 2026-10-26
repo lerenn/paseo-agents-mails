@@ -105,6 +105,11 @@ export class MailStore {
     return mail;
   }
 
+  /** Every mail, oldest first. */
+  all(): Mail[] {
+    return [...this.mails.values()].sort((a, b) => a.createdAt - b.createdAt);
+  }
+
   has(id: string): boolean {
     return this.mails.has(id);
   }
