@@ -66,10 +66,10 @@ function MailboxList({ theme, boxes, selected, onSelect }: { theme: PluginTheme;
         <Pressable key={b.id} accessibilityRole="button" onPress={() => onSelect(b.id)} style={card(theme, { selected: b.id === selected, muted: b.archived })}>
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
             <Text style={{ color: theme.colors.foreground, fontSize: 14, fontWeight: b.unread ? "600" : "400", flexShrink: 1 }}>{b.label}</Text>
-            {b.unread > 0 ? <UnreadBadge text={badge(b.unread)} /> : null}
+            {b.kind === "human" && b.unread > 0 ? <UnreadBadge text={badge(b.unread)} /> : null}
           </View>
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
-            {b.kind === "alias" ? "alias" : b.archived ? "archived agent" : "agent"} · {b.total} mail{b.total === 1 ? "" : "s"}
+            {b.kind === "human" ? "you" : b.holder ? `held by ${b.holder}` : "no holder (mail waits)"} · {b.total} mail{b.total === 1 ? "" : "s"}
           </Text>
         </Pressable>
       ))}
@@ -129,6 +129,12 @@ function ThreadView({ theme, thread, mailbox, archived, onChanged }: { theme: Pl
   const mark = useMutation({ mutationFn: () => markRead({ mailbox: mailbox.id, ids: thread.mails.filter((m) => m.readAt === null).map((m) => m.id) }), onSuccess: onChanged });
   const last = thread.mails[thread.mails.length - 1];
   const target = replyTarget(last) ?? replyTarget(thread.mails[0]);
+  // The human's mailbox is the one place where the user reading marks mail read: no agent is waiting on it.
+  const reads = mailbox.kind === "human" && thread.unread > 0;
+  useEffect(() => {
+    if (reads) mark.mutate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reads, thread.threadId]);
   return (
     <ScrollView>
       <Text style={{ color: theme.colors.foreground, fontSize: 16, fontWeight: "600", padding: 12 }}>{thread.subject}</Text>
@@ -143,13 +149,13 @@ function ThreadView({ theme, thread, mailbox, archived, onChanged }: { theme: Pl
           </Text>
         </View>
       ))}
-      {thread.unread > 0 ? (
+      {thread.unread > 0 && mailbox.kind !== "human" ? (
         <View style={{ padding: 10, gap: 4 }}>
           <Button theme={theme} label="Mark this thread read" disabled={mark.isPending} onPress={() => mark.mutate()} />
-          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>Opening a mailbox never marks anything read. Marking read means the agent will not be woken or shown these mails.</Text>
+          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>Opening an agent's mailbox never marks anything read. Marking read means the agent will not be woken or shown these mails.</Text>
         </View>
       ) : null}
-      {archived ? <Text style={{ color: theme.colors.foregroundMuted, padding: 12 }}>This agent is archived: mail to it cannot be sent.</Text> : <Compose theme={theme} defaultTo={target ?? mailbox.agentId ?? mailbox.label} replyTo={{ id: last.id, subject: thread.subject }} onSent={onChanged} />}
+      {archived ? <Text style={{ color: theme.colors.foregroundMuted, padding: 12 }}>This agent is archived: mail to it cannot be sent.</Text> : <Compose theme={theme} defaultTo={target ?? (mailbox.kind === "human" ? "" : mailbox.label)} replyTo={{ id: last.id, subject: thread.subject }} onSent={onChanged} />}
     </ScrollView>
   );
 }
@@ -194,7 +200,7 @@ export function MailScreen({ theme, layout, params }: PluginScreenProps) {
       <ThreadView key={thread.threadId} theme={theme} thread={thread} mailbox={selected} archived={selected.archived} onChanged={refresh} />
     </View>
   ) : composing && selected ? (
-    <ScrollView><Compose theme={theme} defaultTo={selected.kind === "alias" ? selected.label : selected.agentId ?? ""} onSent={() => { setComposing(false); refresh(); }} /></ScrollView>
+    <ScrollView><Compose theme={theme} defaultTo={selected.kind === "alias" ? selected.label : ""} onSent={() => { setComposing(false); refresh(); }} /></ScrollView>
   ) : null;
 
   return (

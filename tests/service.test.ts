@@ -133,3 +133,35 @@ describe("store", () => {
     expect(c.service.purge()).toBeGreaterThanOrEqual(4);
   });
 });
+
+describe("@user, the human's mailbox", () => {
+  it("agents can mail it with @user or @human; it is never woken and nobody else can read it", async () => {
+    const t = setup(agents());
+    const { mail, resolved } = await t.service.send(A, { to: "@user", subject: "Report ready", body: "see the Your Actions tab", kind: "info" });
+    expect(resolved).toMatchObject({ mailbox: "human:user", holderId: null, display: "@user" });
+    expect(t.notified.at(-1)?.holder).toBeNull(); // nobody to wake
+    expect(mail.to.mailbox).toBe("human:user");
+    await t.service.send(A, { to: "@HUMAN", subject: "second" });
+    expect(t.store.unreadCount("human:user")).toBe(2);
+    // No agent reads it: not the sender, not the Assistant.
+    expect(await t.service.list("aaaaaaaa-1", {})).toHaveLength(0);
+    expect(await t.service.list("cccccccc-3", {})).toHaveLength(0);
+    await expect(t.service.read("cccccccc-3", mail.id)).rejects.toThrow(/No mail/);
+    expect((await t.service.whois("aaaaaaaa-1", "@user")).mailbox).toBe("human:user");
+  });
+
+  it("the human cannot mail themselves, and the usual limits apply to agents mailing the human", async () => {
+    const t = setup(agents(), { pairSendsPer10Minutes: 2, maxUnreadPerMailbox: 100 });
+    await expect(t.service.send({ type: "human", name: "Louis" }, { to: "@user", subject: "x" })).rejects.toThrow(/nobody to mail/);
+    await t.service.send(A, { to: "@user", subject: "1" });
+    await t.service.send(A, { to: "@user", subject: "2" });
+    await expect(t.service.send(A, { to: "@user", subject: "3" })).rejects.toThrow(/same recipient/);
+  });
+
+  it("the user marks it read in the screen (the only mailbox where that is the point)", async () => {
+    const t = setup(agents());
+    await t.service.send(A, { to: "@user", subject: "FYI" });
+    expect(t.store.markRead(["human:user"], undefined, "ui", t.clock.now)).toBe(1);
+    expect(t.store.unreadCount("human:user")).toBe(0);
+  });
+});

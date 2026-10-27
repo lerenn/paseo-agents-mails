@@ -60,6 +60,15 @@ export function adminApi(service: MailService, store: MailStore, humanName: () =
         const { mail, resolved } = await service.send(from, body);
         return { status: 200, body: { id: mail.id, threadId: mail.threadId, to: resolved.display } };
       }
+      if (req.method === "GET" && route === "/aliases") {
+        const agents = await service.directory().list();
+        const book = service.book(agents);
+        return { status: 200, body: { aliases: book.aliases.map((a) => ({ name: a.name, holders: book.holders(agents, a).map((h) => ({ id: h.id, title: h.title })) })) } };
+      }
+      if (req.method === "POST" && route === "/aliases/claim") {
+        const body = z.object({ name: z.string().min(1), agentId: z.string().min(1), takeover: z.boolean().default(false) }).parse(req.body);
+        return { status: 200, body: await service.claimAlias(body.agentId, body.name, body.takeover) };
+      }
       if (req.method === "POST" && route === "/import") {
         const body = importSchema.parse(req.body);
         let imported = 0;

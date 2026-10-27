@@ -32,8 +32,8 @@ export function groupThreads(mails: readonly Mail[]): Thread[] {
 /** The unread badge: empty at zero, capped at 99+. */
 export const badge = (n: number): string => (n <= 0 ? "" : n > 99 ? "99+" : String(n));
 
-/** Who a reply to this mail goes to: its sender when it is an agent, else nobody. */
-export const replyTarget = (m: Mail): string | null => (m.from.type === "agent" && m.from.agentId ? m.from.agentId : null);
+/** Who a reply to this mail goes to: its sender's role alias when it had one (it follows a recreated agent), else the agent, else nobody. */
+export const replyTarget = (m: Mail): string | null => (m.from.type === "agent" ? (m.from.alias ? `@${m.from.alias}` : (m.from.agentId ?? null)) : null);
 
 /** What the agent has seen of a mail, shown on each one. */
 export function readState(m: Mail): string {

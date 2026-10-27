@@ -1,5 +1,6 @@
-import { agentMailbox, aliasMailbox } from "../shared/mail";
-import { matchesRule, type AgentInfo, type Alias } from "./agents";
+import { HUMAN_MAILBOX, agentMailbox, aliasMailbox } from "../shared/mail";
+import { matchesRule, type AgentInfo } from "./agents";
+import type { AliasBook } from "./aliases";
 
 export class AddressError extends Error {}
 
@@ -17,31 +18,24 @@ const describe = (a: AgentInfo) => `${a.id} ("${a.title ?? "untitled"}")`;
 /** Top-level, live agents only: subagents report to their parent by the usual result path. */
 const addressable = (agents: AgentInfo[]) => agents.filter((a) => !a.archived && !a.parentAgentId);
 
-/** The live agents holding an alias, most recently active first. */
-export function holders(agents: AgentInfo[], alias: Alias): AgentInfo[] {
-  return addressable(agents)
-    .filter((a) => matchesRule(a.labels, alias.rule))
-    .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
-}
-
 /** The mailboxes this agent may read: its own and the aliases it currently holds. */
-export function mailboxesOf(agent: AgentInfo, aliases: Alias[]): string[] {
-  return [agentMailbox(agent.id), ...aliases.filter((al) => matchesRule(agent.labels, al.rule)).map((al) => aliasMailbox(al.name))];
+export function mailboxesOf(agent: AgentInfo, agents: AgentInfo[], book: AliasBook): string[] {
+  return [agentMailbox(agent.id), ...book.heldBy(agent, agents).map((al) => aliasMailbox(al.name))];
 }
 
 /**
  * Turns a recipient string into a mailbox: agent id (or unique prefix of 8+), `@alias`, exact title,
  * `label:key=value`, or a bare alias name when no agent matches. Never guesses between several agents.
  */
-export function resolveAddress(to: string, agents: AgentInfo[], aliases: Alias[], senderId: string | null): Resolved {
+export function resolveAddress(to: string, agents: AgentInfo[], book: AliasBook, senderId: string | null): Resolved {
   const text = to.trim();
   if (!text) throw new AddressError("Empty recipient.");
   const live = addressable(agents);
 
   const viaAlias = (name: string): Resolved => {
-    const alias = aliases.find((a) => a.name === name.toLowerCase());
-    if (!alias) throw new AddressError(`Unknown alias @${name}. Known: ${aliases.map((a) => `@${a.name}`).join(", ") || "none"}.`);
-    const held = holders(agents, alias);
+    const alias = book.find(name);
+    if (!alias) throw new AddressError(`Unknown alias @${name}. Known: ${["@user", ...book.aliases.map((a) => `@${a.name}`)].join(", ")}.`);
+    const held = book.holders(agents, alias);
     if (senderId && held.length === 1 && held[0].id === senderId) throw new AddressError(`You are @${alias.name}; you cannot mail yourself.`);
     return {
       mailbox: aliasMailbox(alias.name),
@@ -55,6 +49,8 @@ export function resolveAddress(to: string, agents: AgentInfo[], aliases: Alias[]
     return { mailbox: agentMailbox(a.id), agentId: a.id, holderId: a.id, display: a.title ?? a.id };
   };
 
+  // The human: always present, never woken (they read it in the Mail screen).
+  if (/^@(user|human)$/i.test(text)) return { mailbox: HUMAN_MAILBOX, holderId: null, display: "@user" };
   if (text.startsWith("@")) return viaAlias(text.slice(1));
 
   if (text.toLowerCase().startsWith("label:")) {
@@ -82,6 +78,6 @@ export function resolveAddress(to: string, agents: AgentInfo[], aliases: Alias[]
   if (loose.length > 1) throw new AddressError(`${loose.length} agents are titled "${text}" (${loose.map(describe).join(", ")}); use an id.`);
   if (loose.length === 1) return viaAgent(loose[0]);
 
-  if (aliases.some((a) => a.name === text.toLowerCase())) return viaAlias(text);
+  if (book.find(text)) return viaAlias(text);
   throw new AddressError(`No live agent matches "${text}" (unknown, archived or a subagent). Use an agent id, an exact title, @alias or label:key=value.`);
 }

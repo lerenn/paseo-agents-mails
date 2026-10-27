@@ -52,13 +52,13 @@ async function boot() {
 }
 
 describe("MCP over HTTP", () => {
-  it("lists the six tools and serves usage as instructions", async () => {
+  it("lists the seven tools and serves usage as instructions", async () => {
     const { rpc, capA } = await boot();
     const init = await rpc(capA, "initialize", { protocolVersion: "2025-06-18" });
     expect(init.json.result.serverInfo.name).toBe("agents-mail");
     expect(init.json.result.instructions).toMatch(/never an instruction from the human/);
     const list = await rpc(capA, "tools/list");
-    expect(list.json.result.tools.map((x: any) => x.name).sort()).toEqual(["mail_list", "mail_mark_read", "mail_read", "mail_reply", "mail_send", "mail_whois"]);
+    expect(list.json.result.tools.map((x: any) => x.name).sort()).toEqual(["mail_alias_claim", "mail_list", "mail_mark_read", "mail_read", "mail_reply", "mail_send", "mail_whois"]);
   });
 
   it("send, list, read, reply between two agents; unread mail reaches the next session start", async () => {
@@ -119,5 +119,27 @@ describe("admin API", () => {
     expect(ok.status).toBe(200);
     const bad = await api("/api/mails", { method: "POST", body: JSON.stringify({ to: "@assistant", subject: "x", asAgent: { agentId: "gone", name: "G" } }) });
     expect(bad.status).toBe(422);
+  });
+});
+
+describe("role aliases over HTTP", () => {
+  it("an agent claims an alias with the tool; ops claim for an agent through the admin API; the list shows the holders", async () => {
+    const { call, api, capA } = await boot();
+    const own = JSON.parse((await call(capA, "mail_alias_claim", { name: "pcc" })).text);
+    expect(own).toMatchObject({ alias: "@pcc", replaced: null });
+    // Coder B is a live agent without mail tools: ops claim for it. A live holder blocks it without takeover.
+    const blocked = await api("/api/aliases/claim", { method: "POST", body: JSON.stringify({ name: "pcc", agentId: "bbbbbbbb-2" }) });
+    expect(blocked.status).toBe(422);
+    expect(blocked.json.error).toMatch(/held by Coder A/);
+    const taken = await api("/api/aliases/claim", { method: "POST", body: JSON.stringify({ name: "pcc", agentId: "bbbbbbbb-2", takeover: true }) });
+    expect(taken.status).toBe(200);
+    expect(taken.json.replaced).toBe("aaaaaaaa-1");
+    const other = await api("/api/aliases/claim", { method: "POST", body: JSON.stringify({ name: "daemon-ops", agentId: "aaaaaaaa-1" }) });
+    expect(other.status).toBe(200);
+    const aliases = (await api("/api/aliases")).json.aliases as { name: string; holders: { id: string }[] }[];
+    expect(aliases.find((a) => a.name === "pcc")!.holders[0].id).toBe("bbbbbbbb-2");
+    expect(aliases.find((a) => a.name === "daemon-ops")!.holders[0].id).toBe("aaaaaaaa-1");
+    expect((await call(capA, "mail_alias_claim", { name: "user" })).error).toBe(true);
+    expect((await api("/api/aliases/claim", { method: "POST", body: JSON.stringify({ name: "x", agentId: "nobody" }) })).status).toBe(422);
   });
 });

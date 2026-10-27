@@ -11,7 +11,8 @@ export const mailSchema = z.object({
   id: z.string(),
   threadId: z.string(),
   inReplyTo: z.string().nullable(),
-  from: z.object({ type: z.enum(["agent", "human", "system"]), agentId: z.string().optional(), name: z.string() }),
+  /** `alias` is the role alias the sender held when it wrote: a reply goes to it, so it reaches a recreated agent. */
+  from: z.object({ type: z.enum(["agent", "human", "system"]), agentId: z.string().optional(), name: z.string(), alias: z.string().optional() }),
   /** `mailbox` is `agent:<id>` or `alias:<name>`; `display` is what the sender typed. */
   to: z.object({ mailbox: z.string(), agentId: z.string().optional(), display: z.string() }),
   subject: z.string(),
@@ -30,4 +31,6 @@ export type Mail = z.output<typeof mailSchema>;
 export type ReadVia = NonNullable<Mail["readVia"]>;
 
 export const agentMailbox = (agentId: string) => `agent:${agentId}`;
+/** The human's own mailbox, always there: agents mail it with `@user`, and only its unread count is a badge. */
+export const HUMAN_MAILBOX = "human:user";
 export const aliasMailbox = (name: string) => `alias:${name}`;
