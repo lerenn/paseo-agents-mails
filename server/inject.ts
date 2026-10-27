@@ -17,9 +17,12 @@ export function createContext(request: CreateRequest): { labels: Record<string, 
   return { labels: r.labels, parentAgentId: r.parentAgentId };
 }
 
-/** Whether a new agent gets the mail tools: top-level, not opted out by env or label. */
+/** The rule every agent with the mail tools is told, so a subagent reports through mail and not by prompting its parent. */
+export const PARENT_RULE = "A subagent reports to its parent only by mail (mail_send to @parent), never with send_agent_prompt. Blocking questions for the human still go through the inbox (inbox_ask).";
+
+/** Whether a new agent gets the mail tools: any agent (a subagent too, to mail @parent), not opted out by env or label. */
 export function wantsTools(agent: { labels: Record<string, string>; parentAgentId: string | null }, env: Record<string, string> | undefined, s: AgentsMailSettings): boolean {
-  if (!s.enabled || agent.parentAgentId) return false;
+  if (!s.enabled) return false;
   if (env?.[OFF_ENV]?.toLowerCase() === "off") return false;
   return !matchesAny(agent.labels, parseLabelRules(s.toolsExcludeLabels));
 }
@@ -49,11 +52,12 @@ const fill = (s: AgentsMailSettings, to: string) => s.milestoneInstruction.repla
 /** Gives a new agent the mail server and, when it applies, the milestone line. */
 export function injectTools(request: CreateRequest, o: { url: string; capability: string; tools: string[]; milestone: string | null }): CreateRequest {
   const prompt = request.config.systemPrompt;
+  const added = [o.milestone, PARENT_RULE].filter(Boolean).join("\n\n");
   return {
     ...request,
     config: {
       ...request.config,
-      ...(o.milestone ? { systemPrompt: prompt ? `${prompt}\n\n${o.milestone}` : o.milestone } : {}),
+      systemPrompt: prompt ? `${prompt}\n\n${added}` : added,
       mcpServers: {
         ...(request.config.mcpServers ?? {}),
         [SERVER_NAME]: { type: "http", url: `${o.url}/mcp`, headers: { authorization: `Bearer ${o.capability}` }, alwaysLoad: true },

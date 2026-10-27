@@ -25,7 +25,7 @@ export function mailboxesOf(agent: AgentInfo, agents: AgentInfo[], book: AliasBo
 
 /**
  * Turns a recipient string into a mailbox: agent id (or unique prefix of 8+), `@alias`, exact title,
- * `label:key=value`, or a bare alias name when no agent matches. Never guesses between several agents.
+ * `label:key=value`, `@parent` (the sender's creator), or a bare alias name when no agent matches. Never guesses between several agents.
  */
 export function resolveAddress(to: string, agents: AgentInfo[], book: AliasBook, senderId: string | null): Resolved {
   const text = to.trim();
@@ -48,6 +48,16 @@ export function resolveAddress(to: string, agents: AgentInfo[], book: AliasBook,
     if (a.id === senderId) throw new AddressError("You cannot mail yourself.");
     return { mailbox: agentMailbox(a.id), agentId: a.id, holderId: a.id, display: a.title ?? a.id };
   };
+
+  // The sending agent's parent (the agent that created it).
+  if (/^@parent$/i.test(text)) {
+    const me = senderId ? agents.find((a) => a.id === senderId) : undefined;
+    if (!me) throw new AddressError("@parent is for agents: only an agent has a parent.");
+    if (!me.parentAgentId) throw new AddressError("You have no parent agent (you were not created by another agent), so @parent does not apply to you.");
+    const parent = agents.find((a) => a.id === me.parentAgentId);
+    if (!parent || parent.archived) throw new AddressError(`Your parent agent ${me.parentAgentId} is gone (archived or unknown).`);
+    return viaAgent(parent);
+  }
 
   // The human: always present, never woken (they read it in the Mail screen).
   if (/^@(user|human)$/i.test(text)) return { mailbox: HUMAN_MAILBOX, holderId: null, display: "@user" };
