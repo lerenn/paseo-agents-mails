@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { settingsSchema } from "../shared/settings";
 import type { AgentInfo, Directory } from "./agents";
+import { ClaimStore } from "./aliases";
 import { MailService } from "./service";
 import { MailStore } from "./store";
 
@@ -47,10 +48,11 @@ export function setup(agents: AgentInfo[], settings: Partial<ReturnType<typeof s
   const notified: { id: string; holder: string | null }[] = [];
   const service = new MailService({
     store,
+    claims: new ClaimStore(path.join(dir, "aliases.json")),
     directory,
     settings: () => settingsSchema.parse(settings),
     now: () => clock.now,
     onMail: (m, holder) => notified.push({ id: m.id, holder }),
   });
-  return { dir, store, directory, clock, service, notified, settings: () => settingsSchema.parse(settings), journal: path.join(dir, "mail.jsonl") };
+  return { dir, store, claims: (service as unknown as { p: { claims: ClaimStore } }).p.claims, directory, clock, service, notified, settings: () => settingsSchema.parse(settings), journal: path.join(dir, "mail.jsonl") };
 }

@@ -7,7 +7,7 @@ import { mailboxMailsRpc, mailboxesRpc, markReadRpc, sendRpc } from "./shared/rp
 import { summarize } from "./server/ui";
 import { agentsMailSettings, settingsSchema } from "./shared/settings";
 import { adminApi, newAdminToken } from "./server/admin";
-import { holders } from "./server/address";
+import { ClaimStore } from "./server/aliases";
 import { PaseoDirectory, matchesAny, parseLabelRules, type AgentsMailPaseo } from "./server/agents";
 import { MailHttp } from "./server/http";
 import { CAPABILITY_ENV, createContext, injectTools, milestoneText, MAX_PREPEND, composePrepend, wantsTools } from "./server/inject";
@@ -70,6 +70,7 @@ export default function contribute(server: PluginServerContext) {
   const unsubscribeSettings = settings.subscribe(apply);
 
   const store = new MailStore(process.env.AGENTS_MAIL_JOURNAL ?? path.join(dataDir, "mail.jsonl"));
+  const claims = new ClaimStore(process.env.AGENTS_MAIL_ALIASES ?? path.join(dataDir, "aliases.json"));
   const tokens = new CapabilityStore(process.env.AGENTS_MAIL_CAPABILITIES ?? path.join(dataDir, "capabilities.json"));
   const adminToken = readOrCreateToken(process.env.AGENTS_MAIL_ADMIN_TOKEN ?? path.join(dataDir, "admin-token"));
 
@@ -85,6 +86,7 @@ export default function contribute(server: PluginServerContext) {
 
   const service: MailService = new MailService({
     store,
+    claims,
     directory,
     settings: () => latest,
     now: Date.now,
@@ -100,8 +102,8 @@ export default function contribute(server: PluginServerContext) {
     now: Date.now,
     settings: () => latest,
     async pending() {
-      const aliases = service.aliases();
       const live = await directory.list();
+      const book = service.book(live);
       const byAgent = new Map<string, import("./shared/mail").Mail[]>();
       for (const box of store.mailboxesWithUnread()) {
         // The human's mailbox is read in the Mail screen: nobody is woken for it.
@@ -109,8 +111,8 @@ export default function contribute(server: PluginServerContext) {
         let target: string | undefined;
         if (box.startsWith("agent:")) target = box.slice(6);
         else {
-          const alias = aliases.find((a) => a.name === box.slice(6));
-          target = alias ? holders(live, alias)[0]?.id : undefined;
+          const alias = book.find(box.slice(6));
+          target = alias ? book.holders(live, alias)[0]?.id : undefined;
         }
         if (!target) continue;
         byAgent.set(target, [...(byAgent.get(target) ?? []), ...store.list([box], { unreadOnly: true })]);
@@ -185,7 +187,8 @@ export default function contribute(server: PluginServerContext) {
     if (!url) return;
     let milestone: string | null = null;
     try {
-      milestone = milestoneText(agent, latest, await directory.list(), service.aliases());
+      const live = await directory.list();
+      milestone = milestoneText(agent, latest, live, service.book(live));
     } catch {
       milestone = null;
     }
@@ -197,7 +200,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(mailboxesRpc, async (_input, ctx) => {
     capture(ctx);
     const live = await directory.list().catch(() => null);
-    return summarize(store.all(), live, service.aliases());
+    return summarize(store.all(), live, service.book(live ?? []));
   });
   server.handle(mailboxMailsRpc, async (input, ctx) => {
     capture(ctx);
@@ -248,9 +251,14 @@ export default function contribute(server: PluginServerContext) {
     // Give the status a moment to settle to idle, then wake if mail is waiting.
     setTimeout(() => void wake.poke(agent.id).catch((e) => console.error("agents-mail: poke failed", e)), 1500);
   });
+  const reconcile = () => void service.reconcile().then((r) => r.rehomed && console.log(`agents-mail: re-homed ${r.rehomed} mails under role aliases`), (e) => paseo && console.error("agents-mail: reconcile failed", e));
+  const reconcileTimer = setInterval(reconcile, 60_000);
+  setTimeout(reconcile, 15_000);
   const removeCreated = server.on("agent.created", (_event, ctx) => {
     capture(ctx);
     directory.invalidate();
+    // A new agent may carry a paseo.mail-alias label: give it its role's mailbox.
+    setTimeout(reconcile, 2_000);
   });
   const removeArchived = server.on("agent.archived", ({ agent }, ctx) => {
     capture(ctx);
@@ -267,6 +275,7 @@ export default function contribute(server: PluginServerContext) {
     removeArchived();
     unsubscribeSettings();
     clearInterval(purgeTimer);
+    clearInterval(reconcileTimer);
     wake.stop();
     try {
       rmSync(endpointFile, { force: true });

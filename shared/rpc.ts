@@ -5,11 +5,14 @@ import { mailSchema } from "./mail";
 export const mailboxSummarySchema = z.object({
   /** `agent:<id>` or `alias:<name>`. */
   id: z.string(),
-  kind: z.enum(["human", "agent", "alias"]),
-  /** The agent's title as last seen on a mail to it, or `@alias`. */
+  kind: z.enum(["human", "alias"]),
+  /** `@alias`, or "You (@user)". */
   label: z.string(),
+  /** The agent holding the alias now, or null. */
   agentId: z.string().nullable(),
-  /** The agent is archived or gone: the mailbox is kept for reading only. */
+  /** Its title: who the alias is held by, null when nobody holds it (mail waits). */
+  holder: z.string().nullable(),
+  /** Kept for the screen; aliases are never archived. */
   archived: z.boolean(),
   unread: z.number(),
   total: z.number(),

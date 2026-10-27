@@ -107,7 +107,7 @@ describe("the human's mailbox in the plugin entry", () => {
     const out = await loaded.handles.get("mail.mailboxes")!({}, loaded.ctx);
     expect(out.unread).toBe(1); // only the mail addressed to the human
     expect(out.mailboxes[0]).toMatchObject({ id: "human:user", kind: "human", unread: 1 });
-    expect(out.mailboxes.find((b: any) => b.id === "agent:bbbbbbbb-2").unread).toBe(1); // still there, just not a badge
+    expect(out.mailboxes.some((b: any) => b.id.startsWith("agent:"))).toBe(false); // agent-id mailboxes are not listed
     const cleared = await loaded.handles.get("mail.read")!({ mailbox: "human:user" }, loaded.ctx);
     expect(cleared.marked).toBe(1);
     expect((await loaded.handles.get("mail.mailboxes")!({}, loaded.ctx)).unread).toBe(0);

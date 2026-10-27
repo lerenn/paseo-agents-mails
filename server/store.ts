@@ -7,7 +7,8 @@ type Event =
   | { t: "read"; ids: string[]; at: number; via: ReadVia }
   | { t: "inject"; ids: string[]; at: number }
   | { t: "wake"; id: string; at: number }
-  | { t: "purge"; ids: string[] };
+  | { t: "purge"; ids: string[] }
+  | { t: "rehome"; from: string; to: string; ids: string[] };
 
 export interface Retention {
   readMs: number;
@@ -78,6 +79,13 @@ export class MailStore {
       case "purge":
         for (const id of e.ids) this.mails.delete(id);
         break;
+      case "rehome":
+        // Mail moves to another mailbox (an agent's mail to its role alias); a version that does not know this event ignores it.
+        for (const id of e.ids) {
+          const m = this.mails.get(id);
+          if (m && m.to.mailbox === e.from) m.to = { ...m.to, mailbox: e.to };
+        }
+        break;
     }
   }
 
@@ -103,6 +111,11 @@ export class MailStore {
     this.mails.set(mail.id, mail);
     this.append({ t: "mail", mail });
     return mail;
+  }
+
+  /** Names of the role aliases that hold mail. */
+  aliasNames(): string[] {
+    return [...new Set([...this.mails.values()].filter((m) => m.to.mailbox.startsWith("alias:")).map((m) => m.to.mailbox.slice("alias:".length)))];
   }
 
   /** Every mail, oldest first. */
@@ -153,6 +166,17 @@ export class MailStore {
       this.append(e);
     }
     return changed.length;
+  }
+
+  /** Moves every mail of one mailbox to another, nothing is copied; returns how many moved. */
+  rehome(from: string, to: string): number {
+    if (from === to) return 0;
+    const ids = [...this.mails.values()].filter((m) => m.to.mailbox === from).map((m) => m.id);
+    if (!ids.length) return 0;
+    const e: Event = { t: "rehome", from, to, ids };
+    this.apply(e);
+    this.append(e);
+    return ids.length;
   }
 
   markInjected(ids: string[], at: number): void {

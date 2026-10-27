@@ -1,6 +1,6 @@
 import type { PluginBeforeRequests } from "@getpaseo/plugin/server";
-import { matchesAny, parseLabelRules, type AgentInfo, type Alias } from "./agents";
-import { holders } from "./address";
+import { matchesAny, parseLabelRules, type AgentInfo } from "./agents";
+import type { AliasBook } from "./aliases";
 import type { AgentsMailSettings } from "../shared/settings";
 
 type CreateRequest = PluginBeforeRequests["agent.create"];
@@ -29,12 +29,12 @@ export function milestoneText(
   agent: { labels: Record<string, string> },
   s: AgentsMailSettings,
   live: AgentInfo[],
-  aliases: Alias[],
+  book: AliasBook,
 ): string | null {
   const to = s.milestoneTo.trim();
   if (!to) return null;
-  const alias = aliases.find((a) => `@${a.name}` === to.toLowerCase());
-  if (!alias || holders(live, alias).length === 0) return null;
+  const alias = book.find(to.replace(/^@/, ""));
+  if (!alias || book.holders(live, alias).length === 0) return null;
   const include = parseLabelRules(s.milestoneIncludeLabels);
   const exclude = parseLabelRules(s.milestoneExcludeLabels);
   if (matchesAny(agent.labels, include)) return fill(s, to);

@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { HUMAN_MAILBOX, MAX_BODY_BYTES, MAX_KIND, MAX_SUBJECT, agentMailbox, type Mail, type ReadVia } from "../shared/mail";
+import { HUMAN_MAILBOX, MAX_BODY_BYTES, MAX_KIND, MAX_SUBJECT, agentMailbox, aliasMailbox, type Mail, type ReadVia } from "../shared/mail";
 import type { AgentsMailSettings } from "../shared/settings";
 import { resolveAddress, mailboxesOf, type Resolved } from "./address";
+import { AliasBook, ClaimStore, validAliasName } from "./aliases";
 import { parseAliases, type AgentInfo, type Alias, type Directory } from "./agents";
 import { LimitError, SendLimits } from "./limits";
 import { cleanName, renderBlock, type Rendered } from "./render";
@@ -25,6 +26,7 @@ export interface SendInput {
 
 export interface Ports {
   store: MailStore;
+  claims: ClaimStore;
   directory: Directory;
   settings: () => AgentsMailSettings;
   now: () => number;
@@ -38,8 +40,18 @@ export class MailService {
 
   constructor(private readonly p: Ports) {}
 
+  directory(): Directory {
+    return this.p.directory;
+  }
+
+  /** The aliases from the settings only (assistant, supervisor...). */
   aliases(): Alias[] {
     return parseAliases(this.p.settings().aliases);
+  }
+
+  /** Every role alias with who holds it: settings, `paseo.mail-alias` labels and claims. */
+  book(agents: AgentInfo[]): AliasBook {
+    return AliasBook.build(this.aliases(), agents, this.p.claims.all(), this.p.store.aliasNames());
   }
 
   /** The agent behind a tool call; throws when it is gone or archived. */
@@ -51,7 +63,7 @@ export class MailService {
 
   async mailboxes(agentId: string): Promise<string[]> {
     const agent = await this.caller(agentId).catch(() => null);
-    return agent ? mailboxesOf(agent, this.aliases()) : [agentMailbox(agentId)];
+    return agent ? mailboxesOf(agent, await this.p.directory.list(), this.book(await this.p.directory.list())) : [agentMailbox(agentId)];
   }
 
   async send(sender: Sender, input: SendInput): Promise<{ mail: Mail; resolved: Resolved }> {
@@ -71,7 +83,8 @@ export class MailService {
       if (senderAgent.parentAgentId) throw new UsageError("Subagents cannot send mail; report to your parent through your result.");
     }
     const agents = await this.p.directory.list();
-    const resolved = resolveAddress(input.to, agents, this.aliases(), senderAgent?.id ?? null);
+    const book = this.book(agents);
+    const resolved = resolveAddress(input.to, agents, book, senderAgent?.id ?? null);
 
     if (resolved.mailbox === HUMAN_MAILBOX && sender.type === "human") throw new UsageError("@user is you: nobody to mail.");
 
@@ -94,7 +107,7 @@ export class MailService {
       id,
       threadId,
       inReplyTo: parent?.id ?? null,
-      from: { type: sender.type, ...(sender.agentId ? { agentId: sender.agentId } : {}), name: cleanName(sender.name, 80) },
+      from: { type: sender.type, ...(sender.agentId ? { agentId: sender.agentId } : {}), name: cleanName(sender.name, 80), ...(senderAgent && book.heldBy(senderAgent, agents)[0] ? { alias: book.heldBy(senderAgent, agents)[0].name } : {}) },
       to: { mailbox: resolved.mailbox, ...(resolved.agentId ? { agentId: resolved.agentId } : {}), display: resolved.display },
       subject,
       body,
@@ -116,7 +129,8 @@ export class MailService {
     if (!original || !(await this.canSee(sender.agentId, original))) throw new UsageError(`No mail "${id}" in your mailbox.`);
     if (original.from.type !== "agent" || !original.from.agentId) throw new UsageError("That mail did not come from an agent; there is nobody to reply to.");
     const subject = /^re:/i.test(original.subject) ? original.subject : `Re: ${original.subject}`;
-    return this.send(sender, { to: original.from.agentId, subject: subject.slice(0, MAX_SUBJECT), body, kind: kind ?? "info", inReplyTo: original.id });
+    // To the sender's role alias when it had one: the agent may have been recreated since, and the alias follows it.
+    return this.send(sender, { to: original.from.alias ? `@${original.from.alias}` : original.from.agentId, subject: subject.slice(0, MAX_SUBJECT), body, kind: kind ?? "info", inReplyTo: original.id });
   }
 
   private async canSee(agentId: string | undefined, mail: Mail): Promise<boolean> {
@@ -139,7 +153,8 @@ export class MailService {
   }
 
   async whois(agentId: string, to: string): Promise<{ mailbox: string; display: string; holder: string | null; note?: string }> {
-    const resolved = resolveAddress(to, await this.p.directory.list(), this.aliases(), agentId);
+    const agents = await this.p.directory.list();
+    const resolved = resolveAddress(to, agents, this.book(agents), agentId);
     return { mailbox: resolved.mailbox, display: resolved.display, holder: resolved.holderId, note: resolved.note };
   }
 
@@ -157,6 +172,42 @@ export class MailService {
     this.p.store.markInjected([...rendered.whole, ...rendered.partial], now);
     for (const box of boxes) this.p.store.markRead([box], rendered.whole, via, now);
     return rendered;
+  }
+
+  /**
+   * Claims a role alias for an agent (an agent for itself with `mail_alias_claim`, or ops through the admin API). A live
+   * holder other than the claimant blocks it unless `takeover`; an archived or gone one never does. The agent's own
+   * mail is re-homed under the alias, so the history follows the role.
+   */
+  async claimAlias(agentId: string, name: string, takeover = false): Promise<{ alias: string; rehomed: number; replaced: string | null }> {
+    const alias = name.trim().replace(/^@/, "").toLowerCase();
+    if (!validAliasName(alias)) throw new UsageError(`"${name}" is not a role alias name: lowercase letters, digits, - and _, up to 40 characters; user and human are reserved.`);
+    const agents = await this.p.directory.list();
+    const target = agents.find((a) => a.id === agentId) ?? (await this.p.directory.fresh(agentId));
+    if (!target) throw new UsageError(`Agent ${agentId} is not alive (archived or unknown): it cannot hold @${alias}.`);
+    if (target.parentAgentId) throw new UsageError("A subagent cannot hold a role alias.");
+    const book = this.book(agents.some((a) => a.id === target.id) ? agents : [...agents, target]);
+    const current = (book.find(alias) ? book.holders(agents, book.find(alias)!) : []).find((a) => a.id !== agentId);
+    if (current && !takeover) throw new UsageError(`@${alias} is held by ${current.title ?? "an agent"} (${current.id}); pass takeover to replace it.`);
+    this.p.claims.set(alias, agentId, this.p.now());
+    const rehomed = this.p.store.rehome(agentMailbox(agentId), aliasMailbox(alias));
+    return { alias: `@${alias}`, rehomed, replaced: current?.id ?? null };
+  }
+
+  /**
+   * Keeps mailboxes aligned with the roles: re-homes each holder's own mail under its alias (a labelled agent, a settings
+   * alias holder). Run at start, after agents are created, and every minute. Claims are kept after their holder is
+   * archived (they keep the alias name known); a dead claimant simply holds nothing.
+   */
+  async reconcile(): Promise<{ rehomed: number }> {
+    const agents = await this.p.directory.list();
+    const book = this.book(agents);
+    let rehomed = 0;
+    for (const alias of book.aliases) {
+      const holder = book.holders(agents, alias)[0];
+      if (holder) rehomed += this.p.store.rehome(agentMailbox(holder.id), aliasMailbox(alias.name));
+    }
+    return { rehomed };
   }
 
   /** Retention and caps; run at start and daily. */

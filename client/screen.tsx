@@ -69,7 +69,7 @@ function MailboxList({ theme, boxes, selected, onSelect }: { theme: PluginTheme;
             {b.kind === "human" && b.unread > 0 ? <UnreadBadge text={badge(b.unread)} /> : null}
           </View>
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
-            {b.kind === "human" ? "you" : b.kind === "alias" ? "alias" : b.archived ? "archived agent" : "agent"} · {b.total} mail{b.total === 1 ? "" : "s"}
+            {b.kind === "human" ? "you" : b.holder ? `held by ${b.holder}` : "no holder (mail waits)"} · {b.total} mail{b.total === 1 ? "" : "s"}
           </Text>
         </Pressable>
       ))}
@@ -155,7 +155,7 @@ function ThreadView({ theme, thread, mailbox, archived, onChanged }: { theme: Pl
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>Opening an agent's mailbox never marks anything read. Marking read means the agent will not be woken or shown these mails.</Text>
         </View>
       ) : null}
-      {archived ? <Text style={{ color: theme.colors.foregroundMuted, padding: 12 }}>This agent is archived: mail to it cannot be sent.</Text> : <Compose theme={theme} defaultTo={target ?? (mailbox.kind === "human" ? "" : (mailbox.agentId ?? mailbox.label))} replyTo={{ id: last.id, subject: thread.subject }} onSent={onChanged} />}
+      {archived ? <Text style={{ color: theme.colors.foregroundMuted, padding: 12 }}>This agent is archived: mail to it cannot be sent.</Text> : <Compose theme={theme} defaultTo={target ?? (mailbox.kind === "human" ? "" : mailbox.label)} replyTo={{ id: last.id, subject: thread.subject }} onSent={onChanged} />}
     </ScrollView>
   );
 }
@@ -200,7 +200,7 @@ export function MailScreen({ theme, layout, params }: PluginScreenProps) {
       <ThreadView key={thread.threadId} theme={theme} thread={thread} mailbox={selected} archived={selected.archived} onChanged={refresh} />
     </View>
   ) : composing && selected ? (
-    <ScrollView><Compose theme={theme} defaultTo={selected.kind === "alias" ? selected.label : selected.kind === "human" ? "" : (selected.agentId ?? "")} onSent={() => { setComposing(false); refresh(); }} /></ScrollView>
+    <ScrollView><Compose theme={theme} defaultTo={selected.kind === "alias" ? selected.label : ""} onSent={() => { setComposing(false); refresh(); }} /></ScrollView>
   ) : null;
 
   return (

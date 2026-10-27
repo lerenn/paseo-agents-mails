@@ -1,38 +1,42 @@
-import { HUMAN_MAILBOX, agentMailbox, aliasMailbox, type Mail } from "../shared/mail";
+import { HUMAN_MAILBOX, aliasMailbox, type Mail } from "../shared/mail";
 import type { MailboxSummary } from "../shared/rpc";
-import { holders } from "./address";
-import type { AgentInfo, Alias } from "./agents";
+import type { AgentInfo } from "./agents";
+import type { AliasBook } from "./aliases";
 
-/** Summaries for the Mail screen: every mailbox with mail, plus the aliases that have a live holder. */
-export function summarize(mails: Mail[], live: AgentInfo[] | null, aliases: Alias[]): { mailboxes: MailboxSummary[]; unread: number } {
+/**
+ * Summaries for the Mail screen: only role aliases (@assistant, @pcc...) and the human's own mailbox. A mailbox of a
+ * plain agent id is kept but not listed, so a recreated agent keeps its role's mailbox and the list stays short. An
+ * alias is listed when it has mail or a live holder; `holder` says who holds it now (null: nobody, mail waits).
+ */
+export function summarize(mails: Mail[], live: AgentInfo[] | null, book: AliasBook): { mailboxes: MailboxSummary[]; unread: number } {
   const byBox = new Map<string, Mail[]>([[HUMAN_MAILBOX, []]]);
-  for (const m of mails) byBox.set(m.to.mailbox, [...(byBox.get(m.to.mailbox) ?? []), m]);
-  for (const a of aliases) {
-    if (live && holders(live, a).length > 0 && !byBox.has(aliasMailbox(a.name))) byBox.set(aliasMailbox(a.name), []);
+  for (const m of mails) {
+    if (m.to.mailbox === HUMAN_MAILBOX || m.to.mailbox.startsWith("alias:")) byBox.set(m.to.mailbox, [...(byBox.get(m.to.mailbox) ?? []), m]);
   }
-  const liveIds = new Set((live ?? []).map((a) => a.id));
+  for (const a of book.aliases) {
+    if (live && book.holders(live, a).length > 0 && !byBox.has(aliasMailbox(a.name))) byBox.set(aliasMailbox(a.name), []);
+  }
   const mailboxes = [...byBox].map(([id, list]): MailboxSummary => {
     const isHuman = id === HUMAN_MAILBOX;
-    const isAlias = id.startsWith("alias:");
-    const agentId = isAlias || isHuman ? null : id.slice("agent:".length);
+    const name = id.slice("alias:".length);
+    const alias = isHuman ? undefined : book.find(name);
+    const holder = alias && live ? (book.holders(live, alias)[0] ?? null) : null;
     const last = list[list.length - 1];
-    const title = live?.find((a) => a.id === agentId)?.title;
     return {
       id,
-      kind: isHuman ? "human" : isAlias ? "alias" : "agent",
-      label: isHuman ? "You (@user)" : isAlias ? `@${id.slice("alias:".length)}` : (title ?? last?.to.display ?? agentId ?? id),
-      agentId,
-      // Unknown liveness (no directory) is not "archived".
-      archived: !isAlias && !isHuman && live !== null && agentId !== null && !liveIds.has(agentId),
+      kind: isHuman ? "human" : "alias",
+      label: isHuman ? "You (@user)" : `@${name}`,
+      agentId: holder?.id ?? null,
+      holder: isHuman ? null : (holder?.title ?? holder?.id ?? null),
+      // An alias with nobody holding it is not "archived": its mail waits for the next holder.
+      archived: false,
       unread: list.filter((m) => m.readAt === null).length,
       total: list.length,
       lastAt: last?.createdAt ?? null,
     };
   });
-  // The human's first, then alive ones, then the most recent mail.
-  mailboxes.sort((a, b) => Number(b.kind === "human") - Number(a.kind === "human") || Number(a.archived) - Number(b.archived) || (b.lastAt ?? 0) - (a.lastAt ?? 0) || a.label.localeCompare(b.label));
+  // The human's first, then the most recent mail.
+  mailboxes.sort((a, b) => Number(b.kind === "human") - Number(a.kind === "human") || (b.lastAt ?? 0) - (a.lastAt ?? 0) || a.label.localeCompare(b.label));
   // The only badge: mail addressed to the human. Agent-to-agent mail never counts.
   return { mailboxes, unread: mailboxes.find((b) => b.kind === "human")?.unread ?? 0 };
 }
-
-export { agentMailbox };

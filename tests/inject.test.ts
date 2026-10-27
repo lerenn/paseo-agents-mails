@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { milestoneText, composePrepend, MAX_PREPEND, wantsTools, injectTools } from "../server/inject";
 import { cutBytes, renderBlock, cleanName } from "../server/render";
 import { parseAliases } from "../server/agents";
+import { AliasBook } from "../server/aliases";
 import { agent, setup } from "../server/testing";
 import { settingsSchema } from "../shared/settings";
 
@@ -9,6 +10,7 @@ const A = { type: "agent" as const, agentId: "aaaaaaaa-1", name: "Coder A" };
 const s = settingsSchema.parse({});
 const live = [agent("c", { labels: { "paseo.assistant": "1" } })];
 const aliases = parseAliases(s.aliases);
+const bookOf = (live: ReturnType<typeof agent>[]) => AliasBook.build(aliases, live);
 
 describe("injection service", () => {
   it("marks whole mails read, never injects twice, keeps cut mails unread", async () => {
@@ -62,12 +64,12 @@ describe("create hook helpers", () => {
   });
 
   it("milestone line only when @assistant resolves; factory workers excluded, supervisor included, assistant itself never", () => {
-    expect(milestoneText({ labels: {} }, s, live, aliases)).toMatch(/Mail @assistant with the mail_send tool/);
-    expect(milestoneText({ labels: {} }, s, [], aliases)).toBeNull();
-    expect(milestoneText({ labels: { "paseo.factory": "1" } }, s, live, aliases)).toBeNull();
-    expect(milestoneText({ labels: { "paseo.factory": "1", "paseo.factory.supervisor": "1" } }, s, live, aliases)).not.toBeNull();
-    expect(milestoneText({ labels: { "paseo.assistant": "1" } }, s, live, aliases)).toBeNull();
-    expect(milestoneText({ labels: {} }, { ...s, milestoneTo: "" }, live, aliases)).toBeNull();
+    expect(milestoneText({ labels: {} }, s, live, bookOf(live))).toMatch(/Mail @assistant with the mail_send tool/);
+    expect(milestoneText({ labels: {} }, s, [], bookOf([]))).toBeNull();
+    expect(milestoneText({ labels: { "paseo.factory": "1" } }, s, live, bookOf(live))).toBeNull();
+    expect(milestoneText({ labels: { "paseo.factory": "1", "paseo.factory.supervisor": "1" } }, s, live, bookOf(live))).not.toBeNull();
+    expect(milestoneText({ labels: { "paseo.assistant": "1" } }, s, live, bookOf(live))).toBeNull();
+    expect(milestoneText({ labels: {} }, { ...s, milestoneTo: "" }, live, bookOf(live))).toBeNull();
   });
 
   it("injectTools adds the server, preapproves the tools and keeps what was there", () => {
