@@ -18,7 +18,7 @@ export function createContext(request: CreateRequest): { labels: Record<string, 
 }
 
 /** The rule every agent with the mail tools is told, so a subagent reports through mail and not by prompting its parent. */
-export const PARENT_RULE = "A subagent reports to its parent only by mail (mail_send to @parent), never with send_agent_prompt. Blocking questions for the human still go through the inbox (inbox_ask).";
+export const PARENT_RULE = "A subagent reports to its parent only by mail (mail_send to @parent), never with send_agent_prompt. Blocking questions for the human still go through the inbox (inbox_ask). Parent to child: mail unless you need to interrupt; use send_agent_prompt only to steer, redirect or stop a running child. Peers and coordinators: mail, or send_agent_prompt with activeTurnBehavior skip; never the default steer.";
 
 /** Whether a new agent gets the mail tools: any agent (a subagent too, to mail @parent), not opted out by env or label. */
 export function wantsTools(agent: { labels: Record<string, string>; parentAgentId: string | null }, env: Record<string, string> | undefined, s: AgentsMailSettings): boolean {

@@ -79,7 +79,7 @@ export function resolveAddress(to: string, agents: AgentInfo[], book: AliasBook,
   if (matched.length === 1) {
     const a = matched[0];
     if (a.archived) throw new AddressError(`Agent ${describe(a)} is archived.`);
-    if (a.parentAgentId) throw new AddressError(`Agent ${describe(a)} is a subagent; mail its parent instead.`);
+    if (a.parentAgentId && a.parentAgentId !== senderId) throw new AddressError(`Agent ${describe(a)} is a subagent; only its parent can mail it. Mail its parent instead.`);
     return viaAgent(a);
   }
 
