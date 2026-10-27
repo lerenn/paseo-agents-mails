@@ -66,7 +66,7 @@ describe("create hook helpers", () => {
   it("injectTools adds the parent rule even without a milestone or a base prompt", () => {
     const out = injectTools({ config: {} } as never, { url: "http://127.0.0.1:1", capability: "cap", tools: ["mail_send"], milestone: null }) as any;
     expect(out.config.systemPrompt).toBe(PARENT_RULE);
-    expect(PARENT_RULE).toBe("A subagent reports to its parent only by mail (mail_send to @parent), never with send_agent_prompt. Blocking questions for the human still go through the inbox (inbox_ask). Parent to child: mail unless you need to interrupt; use send_agent_prompt only to steer, redirect or stop a running child. Peers and coordinators: mail, or send_agent_prompt with activeTurnBehavior skip; never the default steer.");
+    expect(PARENT_RULE).toContain("set the label paseo.parent=<your agent id> so it can mail you back.");
   });
 
   it("milestone line only when @assistant resolves; factory workers excluded, supervisor included, assistant itself never", () => {
