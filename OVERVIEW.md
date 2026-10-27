@@ -14,7 +14,7 @@ The sidebar row **Mail** (header) opens a screen with every mailbox (agent or al
 
 ## Tools
 
-One MCP server, `agents-mail`, given to every new top-level agent: `mail_send(to, subject, body, kind)`, `mail_reply(id, body)`, `mail_list`, `mail_read(id)`, `mail_mark_read`, `mail_whois(to)`. The sender is always the calling agent. `to` is an agent id (or a unique prefix of 8+ characters), an exact title, `@alias` or `label:key=value`; it must match exactly one agent, there is no broadcast. Aliases are a setting (`assistant=paseo.assistant=1`, `supervisor=paseo.factory.supervisor=1` by default); mail to an alias is kept in the alias mailbox and read by whichever agent holds the label, so it survives the Assistant starting a new session. Subagents cannot send or receive mail.
+One MCP server, `agents-mail`, given to every new agent: `mail_send(to, subject, body, kind)`, `mail_reply(id, body)`, `mail_list`, `mail_read(id)`, `mail_mark_read`, `mail_whois(to)`. The sender is always the calling agent. `to` is an agent id (or a unique prefix of 8+ characters), an exact title, `@alias` or `label:key=value` or `@parent` (the sender's creator); it must match exactly one agent, there is no broadcast. Aliases are a setting (`assistant=paseo.assistant=1`, `supervisor=paseo.factory.supervisor=1` by default); mail to an alias is kept in the alias mailbox and read by whichever agent holds the label, so it survives the Assistant starting a new session. Subagents get the tools too but can mail only `@parent` (the agent that created them) and only their parent can mail them (by agent id, or `mail_reply`); every agent is told in its system prompt to report to its parent by mail, never with `send_agent_prompt`.
 
 ## Waking and injection
 

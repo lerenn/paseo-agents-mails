@@ -80,11 +80,11 @@ export class MailService {
     if (sender.type === "agent") {
       if (!sender.agentId) throw new UsageError("This agent is not known yet; try again after its first turn.");
       senderAgent = await this.caller(sender.agentId);
-      if (senderAgent.parentAgentId) throw new UsageError("Subagents cannot send mail; report to your parent through your result.");
     }
     const agents = await this.p.directory.list();
     const book = this.book(agents);
     const resolved = resolveAddress(input.to, agents, book, senderAgent?.id ?? null);
+    if (senderAgent?.parentAgentId && resolved.agentId !== senderAgent.parentAgentId) throw new UsageError("A subagent mails only its parent: use to=@parent.");
 
     if (resolved.mailbox === HUMAN_MAILBOX && sender.type === "human") throw new UsageError("@user is you: nobody to mail.");
 

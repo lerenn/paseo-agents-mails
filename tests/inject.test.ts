@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { milestoneText, composePrepend, MAX_PREPEND, wantsTools, injectTools } from "../server/inject";
+import { milestoneText, composePrepend, MAX_PREPEND, wantsTools, injectTools, PARENT_RULE } from "../server/inject";
 import { cutBytes, renderBlock, cleanName } from "../server/render";
 import { parseAliases } from "../server/agents";
 import { AliasBook } from "../server/aliases";
@@ -56,11 +56,17 @@ describe("composePrepend", () => {
 });
 
 describe("create hook helpers", () => {
-  it("tools for top-level agents only, opt-out by env or label", () => {
+  it("tools for every agent (subagents too, to mail @parent), opt-out by env or label", () => {
     expect(wantsTools({ labels: {}, parentAgentId: null }, {}, s)).toBe(true);
-    expect(wantsTools({ labels: {}, parentAgentId: "p" }, {}, s)).toBe(false);
+    expect(wantsTools({ labels: {}, parentAgentId: "p" }, {}, s)).toBe(true);
     expect(wantsTools({ labels: {}, parentAgentId: null }, { PASEO_AGENTS_MAIL: "off" }, s)).toBe(false);
     expect(wantsTools({ labels: { x: "1" }, parentAgentId: null }, {}, { ...s, toolsExcludeLabels: "x" })).toBe(false);
+  });
+
+  it("injectTools adds the parent rule even without a milestone or a base prompt", () => {
+    const out = injectTools({ config: {} } as never, { url: "http://127.0.0.1:1", capability: "cap", tools: ["mail_send"], milestone: null }) as any;
+    expect(out.config.systemPrompt).toBe(PARENT_RULE);
+    expect(PARENT_RULE).toBe("A subagent reports to its parent only by mail (mail_send to @parent), never with send_agent_prompt. Blocking questions for the human still go through the inbox (inbox_ask). Parent to child: mail unless you need to interrupt; use send_agent_prompt only to steer, redirect or stop a running child. Peers and coordinators: mail, or send_agent_prompt with activeTurnBehavior skip; never the default steer.");
   });
 
   it("milestone line only when @assistant resolves; factory workers excluded, supervisor included, assistant itself never", () => {
@@ -77,7 +83,7 @@ describe("create hook helpers", () => {
       { config: { systemPrompt: "base", mcpServers: { other: { type: "http", url: "u" } }, toolPolicy: { preapproved: [{ kind: "mcp", server: "o", tool: "t" }] } } } as never,
       { url: "http://127.0.0.1:1", capability: "cap", tools: ["mail_send"], milestone: "M" },
     ) as any;
-    expect(out.config.systemPrompt).toBe("base\n\nM");
+    expect(out.config.systemPrompt).toBe(`base\n\nM\n\n${PARENT_RULE}`);
     expect(Object.keys(out.config.mcpServers)).toEqual(["other", "agents-mail"]);
     expect(out.config.toolPolicy.preapproved).toHaveLength(2);
     expect(out.env.PASEO_AGENTS_MAIL_CAPABILITY).toBe("cap");

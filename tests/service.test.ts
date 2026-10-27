@@ -41,11 +41,42 @@ describe("send and addressing", () => {
     const list = [...agents(), agent("ffffffff-6", { title: "Twin" }), agent("gggggggg-7", { title: "Twin" }), agent("hhhhhhhh-8", { archived: true })];
     const t = setup(list);
     await expect(t.service.send(A, { to: "hhhhhhhh-8", subject: "x" })).rejects.toThrow(/archived/);
-    await expect(t.service.send(A, { to: "dddddddd-4", subject: "x" })).rejects.toThrow(/subagent/);
+    await expect(t.service.send({ ...A, agentId: "bbbbbbbb-2", name: "B" }, { to: "dddddddd-4", subject: "x" })).rejects.toThrow(/only its parent can mail/);
     await expect(t.service.send(A, { to: "aaaaaaaa-1", subject: "x" })).rejects.toThrow(/yourself/);
     await expect(t.service.send(A, { to: "nobody", subject: "x" })).rejects.toThrow(/No live agent/);
     await expect(t.service.send(A, { to: "Twin", subject: "x" })).rejects.toThrow(/2 agents/);
-    await expect(t.service.send({ ...A, agentId: "dddddddd-4" }, { to: "Coder B", subject: "x" })).rejects.toThrow(/Subagents/);
+    await expect(t.service.send({ ...A, agentId: "dddddddd-4" }, { to: "Coder B", subject: "x" })).rejects.toThrow(/only its parent/);
+  });
+
+  it("@parent resolves to the creator; a subagent mails only its parent", async () => {
+    const t = setup(agents());
+    const sub = { type: "agent" as const, agentId: "dddddddd-4", name: "Sub" };
+    const { mail, resolved } = await t.service.send(sub, { to: "@parent", subject: "done" });
+    expect(mail.to).toMatchObject({ mailbox: "agent:aaaaaaaa-1", agentId: "aaaaaaaa-1" });
+    expect(resolved.holderId).toBe("aaaaaaaa-1");
+    expect((await t.service.whois("dddddddd-4", "@parent")).holder).toBe("aaaaaaaa-1");
+    await expect(t.service.send(sub, { to: "aaaaaaaa-1", subject: "x" })).resolves.toBeTruthy();
+    await expect(t.service.send(sub, { to: "@assistant", subject: "x" })).rejects.toThrow(/only its parent/);
+  });
+
+  it("a parent mails its own subagent by id and replies to its mail; others cannot", async () => {
+    const t = setup(agents());
+    const sub = { type: "agent" as const, agentId: "dddddddd-4", name: "Sub" };
+    const { mail: up } = await t.service.send(sub, { to: "@parent", subject: "q" });
+    const down = await t.service.reply(A, up.id, "answer");
+    expect(down.mail.to).toMatchObject({ mailbox: "agent:dddddddd-4", agentId: "dddddddd-4" });
+    await t.service.send(A, { to: "dddddddd-4", subject: "go" });
+    expect(t.store.unreadCount("agent:dddddddd-4")).toBe(2);
+    await expect(t.service.send({ type: "agent", agentId: "bbbbbbbb-2", name: "B" }, { to: "dddddddd-4", subject: "x" })).rejects.toThrow(/only its parent can mail/);
+    await expect(t.service.send(A, { to: "Sub", subject: "x" })).rejects.toThrow(/No live agent/);
+  });
+
+  it("@parent errors clearly without a parent or with a gone parent", async () => {
+    const t = setup(agents());
+    await expect(t.service.send(A, { to: "@parent", subject: "x" })).rejects.toThrow(/no parent/);
+    await expect(t.service.send({ type: "human", name: "me" }, { to: "@parent", subject: "x" })).rejects.toThrow(/for agents/);
+    t.directory.agents = agents().map((a) => (a.id === "aaaaaaaa-1" ? { ...a, archived: true } : a));
+    await expect(t.service.send({ type: "agent", agentId: "dddddddd-4", name: "Sub" }, { to: "@parent", subject: "x" })).rejects.toThrow(/gone/);
   });
 
   it("enforces size caps", async () => {
