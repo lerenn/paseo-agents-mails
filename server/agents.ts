@@ -3,7 +3,10 @@ export interface AgentInfo {
   id: string;
   title: string | null;
   labels: Record<string, string>;
+  /** Native subagent link (snapshot field): the only thing that restricts addressing. */
   parentAgentId: string | null;
+  /** The creating agent from the parent labels: only resolves `@parent`, restricts nothing. */
+  creatorId: string | null;
   archived: boolean;
   status: "initializing" | "idle" | "running" | "error" | "closed" | string;
   requiresAttention: boolean;
@@ -61,15 +64,29 @@ export function parseAliases(text: string): Alias[] {
   return out;
 }
 
+/** The daemon labels every agent created by an agent's `create_agent` (any workspace) with its creator; `paseo.parent` is the fallback for creators the daemon cannot see (e.g. a top-level MCP session). */
+export const PARENT_LABELS = ["paseo.parent-agent-id", "paseo.parent"] as const;
+
+/** The creator named by the parent labels (first with a value). */
+export function labelParentOf(labels: Record<string, string>): string | null {
+  for (const key of PARENT_LABELS) {
+    const v = labels[key];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return null;
+}
+
 export function fromSnapshot(agent: unknown): AgentInfo | null {
   const a = agent as Record<string, unknown> | null | undefined;
   if (!a || typeof a.id !== "string") return null;
   const at = typeof a.lastActivityAt === "string" ? Date.parse(a.lastActivityAt) : Number(a.lastActivityAt ?? 0);
+  const labels = (a.labels as Record<string, string> | undefined) ?? {};
   return {
     id: a.id,
     title: typeof a.title === "string" ? a.title : null,
-    labels: (a.labels as Record<string, string> | undefined) ?? {},
+    labels,
     parentAgentId: typeof a.parentAgentId === "string" ? a.parentAgentId : null,
+    creatorId: labelParentOf(labels),
     archived: Boolean(a.archivedAt),
     status: typeof a.status === "string" ? a.status : "idle",
     requiresAttention: Boolean(a.requiresAttention),

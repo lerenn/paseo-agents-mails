@@ -53,9 +53,10 @@ export function resolveAddress(to: string, agents: AgentInfo[], book: AliasBook,
   if (/^@parent$/i.test(text)) {
     const me = senderId ? agents.find((a) => a.id === senderId) : undefined;
     if (!me) throw new AddressError("@parent is for agents: only an agent has a parent.");
-    if (!me.parentAgentId) throw new AddressError("You have no parent agent (you were not created by another agent), so @parent does not apply to you.");
-    const parent = agents.find((a) => a.id === me.parentAgentId);
-    if (!parent || parent.archived) throw new AddressError(`Your parent agent ${me.parentAgentId} is gone (archived or unknown).`);
+    const creatorId = me.parentAgentId ?? me.creatorId;
+    if (!creatorId) throw new AddressError("You have no parent agent (you were not created by another agent, and no paseo.parent label names one), so @parent does not apply to you.");
+    const parent = agents.find((a) => a.id === creatorId);
+    if (!parent || parent.archived) throw new AddressError(`Your parent agent ${creatorId} is gone (archived or unknown).`);
     return viaAgent(parent);
   }
 

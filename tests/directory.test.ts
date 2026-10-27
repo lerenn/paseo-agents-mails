@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PaseoDirectory, type AgentsMailPaseo } from "../server/agents";
+import { PaseoDirectory, fromSnapshot, type AgentsMailPaseo } from "../server/agents";
 
 /** The shapes Paseo returns: list() entries are `{ agent }`, refresh() gives `{ agent, project }`. */
 const snapshot = (o: Record<string, unknown> = {}) => ({ id: "a1", title: "Coder", status: "idle", labels: { x: "1" }, parentAgentId: null, requiresAttention: false, attentionReason: null, lastActivityAt: "2026-10-26T10:00:00Z", archivedAt: null, ...o });
@@ -74,5 +74,21 @@ describe("PaseoDirectory.send uses the fork's skip when the host has it", () => 
     });
     await expect(dir.send("a", "x")).rejects.toThrow(/not found/);
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe("the creating agent (regression: @parent never resolved for agents created in another workspace)", () => {
+  const info = (o: Record<string, unknown>) => fromSnapshot(snapshot(o));
+  it("keeps the native parentAgentId as the only restriction", () => {
+    expect(info({ parentAgentId: "native", labels: { "paseo.parent-agent-id": "daemon" } })).toMatchObject({ parentAgentId: "native", creatorId: "daemon" });
+  });
+  it("reads the creator from the label the daemon sets on every create_agent child, without restricting", () => {
+    expect(info({ labels: { "paseo.parent-agent-id": "daemon", "paseo.parent": "label" } })).toMatchObject({ parentAgentId: null, creatorId: "daemon" });
+  });
+  it("then from paseo.parent set by the creator", () => {
+    expect(info({ labels: { "paseo.parent": " creator-1 " } })).toMatchObject({ parentAgentId: null, creatorId: "creator-1" });
+  });
+  it("has none without them", () => {
+    expect(info({ labels: { x: "1", "paseo.parent": "" } })).toMatchObject({ parentAgentId: null, creatorId: null });
   });
 });

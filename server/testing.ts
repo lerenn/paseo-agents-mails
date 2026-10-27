@@ -12,6 +12,7 @@ export const agent = (id: string, o: Partial<AgentInfo> = {}): AgentInfo => ({
   title: id,
   labels: {},
   parentAgentId: null,
+  creatorId: null,
   archived: false,
   status: "idle",
   requiresAttention: false,

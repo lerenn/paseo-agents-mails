@@ -79,6 +79,22 @@ describe("send and addressing", () => {
     await expect(t.service.send({ type: "agent", agentId: "dddddddd-4", name: "Sub" }, { to: "@parent", subject: "x" })).rejects.toThrow(/gone/);
   });
 
+  it("a label parent adds @parent and restricts nothing: still mails @assistant and is mailed by others", async () => {
+    const t = setup([...agents(), agent("eeeeeeee-5", { title: "Worker", creatorId: "aaaaaaaa-1" })]);
+    const worker = { type: "agent" as const, agentId: "eeeeeeee-5", name: "Worker" };
+    expect((await t.service.whois("eeeeeeee-5", "@parent")).holder).toBe("aaaaaaaa-1");
+    const { resolved } = await t.service.send(worker, { to: "@parent", subject: "done" });
+    expect(resolved.agentId).toBe("aaaaaaaa-1");
+    await t.service.send(worker, { to: "@assistant", subject: "milestone" });
+    await t.service.send(A, { to: "eeeeeeee-5", subject: "next" });
+    await t.service.send({ type: "agent", agentId: "bbbbbbbb-2", name: "B" }, { to: "eeeeeeee-5", subject: "hi" });
+  });
+
+  it("@parent errors clearly when the label points to a missing agent", async () => {
+    const t = setup([...agents(), agent("eeeeeeee-5", { title: "Worker", creatorId: "ffffffff-6" })]);
+    await expect(t.service.send({ type: "agent", agentId: "eeeeeeee-5", name: "Worker" }, { to: "@parent", subject: "x" })).rejects.toThrow(/ffffffff-6 is gone/);
+  });
+
   it("enforces size caps", async () => {
     const t = setup(agents());
     await expect(t.service.send(A, { to: "Coder B", subject: "x", body: "a".repeat(17 * 1024) })).rejects.toThrow(/16 KB/);
