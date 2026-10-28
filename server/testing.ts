@@ -4,6 +4,7 @@ import path from "node:path";
 import { settingsSchema } from "../shared/settings";
 import type { AgentInfo, Directory } from "./agents";
 import { ClaimStore } from "./aliases";
+import type { AuditEntry } from "./follow";
 import { MailService } from "./service";
 import { MailStore } from "./store";
 
@@ -46,6 +47,7 @@ export function setup(agents: AgentInfo[], settings: Partial<ReturnType<typeof s
   const store = new MailStore(path.join(dir, "mail.jsonl"));
   const directory = new FakeDirectory(agents);
   const clock = { now: 1_000_000 };
+  const audit: AuditEntry[] = [];
   const notified: { id: string; holder: string | null }[] = [];
   const service = new MailService({
     store,
@@ -54,6 +56,7 @@ export function setup(agents: AgentInfo[], settings: Partial<ReturnType<typeof s
     settings: () => settingsSchema.parse(settings),
     now: () => clock.now,
     onMail: (m, holder) => notified.push({ id: m.id, holder }),
+    audit: { record: (e) => void audit.push(e) },
   });
-  return { dir, store, claims: (service as unknown as { p: { claims: ClaimStore } }).p.claims, directory, clock, service, notified, settings: () => settingsSchema.parse(settings), journal: path.join(dir, "mail.jsonl") };
+  return { dir, store, claims: (service as unknown as { p: { claims: ClaimStore } }).p.claims, directory, clock, service, notified, audit, settings: () => settingsSchema.parse(settings), journal: path.join(dir, "mail.jsonl") };
 }

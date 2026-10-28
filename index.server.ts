@@ -9,6 +9,7 @@ import { agentsMailSettings, settingsSchema } from "./shared/settings";
 import { adminApi, newAdminToken } from "./server/admin";
 import { ClaimStore } from "./server/aliases";
 import { PaseoDirectory, matchesAny, parseLabelRules, type AgentsMailPaseo } from "./server/agents";
+import { AuditLog } from "./server/follow";
 import { MailHttp } from "./server/http";
 import { CAPABILITY_ENV, createContext, injectTools, milestoneText, MAX_PREPEND, composePrepend, wantsTools } from "./server/inject";
 import { McpServer } from "./server/mcp";
@@ -72,6 +73,7 @@ export default function contribute(server: PluginServerContext) {
   const store = new MailStore(process.env.AGENTS_MAIL_JOURNAL ?? path.join(dataDir, "mail.jsonl"));
   const claims = new ClaimStore(process.env.AGENTS_MAIL_ALIASES ?? path.join(dataDir, "aliases.json"));
   const tokens = new CapabilityStore(process.env.AGENTS_MAIL_CAPABILITIES ?? path.join(dataDir, "capabilities.json"));
+  const audit = new AuditLog(process.env.AGENTS_MAIL_AUDIT ?? path.join(dataDir, "audit.jsonl"));
   const adminToken = readOrCreateToken(process.env.AGENTS_MAIL_ADMIN_TOKEN ?? path.join(dataDir, "admin-token"));
 
   // The Paseo API only reaches a plugin through hook and RPC contexts; keep the first one seen.
@@ -90,6 +92,7 @@ export default function contribute(server: PluginServerContext) {
     directory,
     settings: () => latest,
     now: Date.now,
+    audit,
     onMail: (mail, holderId) => {
       wake.notify(holderId, mail.createdAt);
     },
@@ -117,7 +120,10 @@ export default function contribute(server: PluginServerContext) {
         if (!target) continue;
         byAgent.set(target, [...(byAgent.get(target) ?? []), ...store.list([box], { unreadOnly: true })]);
       }
-      return [...byAgent].map(([agentId, mails]) => ({ agentId, mails: mails.sort((a, b) => a.createdAt - b.createdAt) }));
+      // Mailboxes an agent follows (settings `followGrants`, wake granted): the only way anyone is woken for the human's mail.
+      const followed = new Map((await service.followedUnread(live)).map((f) => [f.agentId, f.mails.sort((a, b) => a.createdAt - b.createdAt)]));
+      for (const id of followed.keys()) if (!byAgent.has(id)) byAgent.set(id, []);
+      return [...byAgent].map(([agentId, mails]) => ({ agentId, mails: mails.sort((a, b) => a.createdAt - b.createdAt), followed: followed.get(agentId) }));
     },
     fresh: (id) => directory.fresh(id),
     send: (id, text) => directory.send(id, text),
@@ -149,8 +155,16 @@ export default function contribute(server: PluginServerContext) {
   const http = new MailHttp({
     tokens,
     mcp: new McpServer(mailTools),
-    context: (capability) => ({ service, nameOf, instructions: () => instructionsFor(capability.agentId) }),
-    admin: adminApi(service, store, () => latest.humanName),
+    context: (capability) => ({
+      service,
+      nameOf,
+      instructions: async () => {
+        const base = await instructionsFor(capability.agentId);
+        const follow = capability.agentId && latest.enabled ? await service.followNotice(capability.agentId).catch(() => null) : null;
+        return follow ? `${base}\n\n${follow}` : base;
+      },
+    }),
+    admin: adminApi(service, store, () => latest.humanName, audit),
     adminToken: () => adminToken,
   });
   const port = Number(process.env.PASEO_AGENTS_MAIL_PORT ?? DEFAULT_PORT);
@@ -166,6 +180,7 @@ export default function contribute(server: PluginServerContext) {
 
   const purge = () => {
     try {
+      audit.purge(latest.auditRetentionDays * 86_400_000, Date.now());
       const n = service.purge();
       if (n) console.log(`agents-mail: purged ${n} mails`);
     } catch (error) {

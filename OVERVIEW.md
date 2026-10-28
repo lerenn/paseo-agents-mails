@@ -37,3 +37,11 @@ Subject 200 characters, body 16 KB, 30 mails per sender per 10 minutes, 10 per s
 ## Environment
 
 `PASEO_AGENTS_MAIL_PORT` (default 47843, loopback; fixed so pod agents can reach it through the tunnel), `PASEO_AGENTS_MAIL=off` on an agent to skip the tools. Mail is a JSONL journal in the plugin data folder.
+
+## Following other mailboxes (off by default)
+
+Nobody reads, marks or is woken for a mailbox other than their own unless the host setting `followGrants` says so, one rule per line:
+
+    <@alias or label key=value> = <@user|@alias>[, ...] [: read|mark|wake ...]
+
+for example `@assistant = @user : read+mark, wake`. `mail_list`/`mail_mark_read` then take `mailbox="@user"`; `mail_read` of a followed mail shows it without marking it read. Marking a followed box needs `ids` (or `all=true`). Followed mail is never injected and never inlined in a wake: the wake is a count-and-names notice, and the mail stays data, not instructions. Replies to followed mail are refused. Wakes reuse the normal debounce, gap, global budget, 3 wakes per mail and per-thread caps; mail the grantee sent itself never wakes it. Every list/read/mark (and every denial) is appended to `audit.jsonl` in the plugin data folder (`GET /api/audit` on the admin API; `auditRetentionDays`, 90 by default); a marked mail also carries `readBy`.
