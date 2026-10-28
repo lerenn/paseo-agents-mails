@@ -22,6 +22,8 @@ export const mailSchema = z.object({
   createdAt: z.number(),
   readAt: z.number().nullable(),
   readVia: z.enum(["tool", "inject", "inline", "ui", "import"]).nullable(),
+  /** The agent that marked a followed mail read (readVia stays "tool" so an older plugin still loads the journal). */
+  readBy: z.string().optional(),
   /** Set when an injection showed only part of the mail, or all of it. */
   injectedAt: z.number().nullable(),
   wakes: z.number(),

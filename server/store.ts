@@ -4,7 +4,7 @@ import { mailSchema, type Mail, type ReadVia } from "../shared/mail";
 
 type Event =
   | { t: "mail"; mail: Mail }
-  | { t: "read"; ids: string[]; at: number; via: ReadVia }
+  | { t: "read"; ids: string[]; at: number; via: ReadVia; by?: string }
   | { t: "inject"; ids: string[]; at: number }
   | { t: "wake"; id: string; at: number }
   | { t: "purge"; ids: string[] }
@@ -59,6 +59,7 @@ export class MailStore {
           if (m && m.readAt === null) {
             m.readAt = e.at;
             m.readVia = e.via;
+            if (e.by) m.readBy = e.by;
           }
         }
         break;
@@ -156,12 +157,12 @@ export class MailStore {
   }
 
   /** Marks the given mails of these mailboxes read (every unread one when `ids` is omitted); returns how many changed. */
-  markRead(mailboxes: string[], ids: string[] | undefined, via: ReadVia, at: number): number {
+  markRead(mailboxes: string[], ids: string[] | undefined, via: ReadVia, at: number, by?: string): number {
     const changed = [...this.mails.values()]
       .filter((m) => m.readAt === null && mailboxes.includes(m.to.mailbox) && (!ids || ids.includes(m.id)))
       .map((m) => m.id);
     if (changed.length) {
-      const e: Event = { t: "read", ids: changed, at, via };
+      const e: Event = { t: "read", ids: changed, at, via, ...(by ? { by } : {}) };
       this.apply(e);
       this.append(e);
     }

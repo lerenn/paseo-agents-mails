@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { API_VERSION, MAX_BODY_BYTES, type Mail } from "../shared/mail";
 import { AddressError } from "./address";
+import type { AuditLog } from "./follow";
 import { LimitError } from "./limits";
 import { UsageError, type MailService } from "./service";
 import type { MailStore } from "./store";
@@ -37,11 +38,13 @@ const sendSchema = z.object({
 });
 
 /** The loopback admin API, the contract other plugins (the Assistant's Mailbox tab) build on. Versioned by `apiVersion`. */
-export function adminApi(service: MailService, store: MailStore, humanName: () => string) {
+export function adminApi(service: MailService, store: MailStore, humanName: () => string, audit?: AuditLog) {
   return async (req: { method: string; path: string; query: URLSearchParams; body: unknown }): Promise<Reply> => {
     try {
       const route = req.path.replace(/^\/api/, "");
       if (req.method === "GET" && route === "/health") return { status: 200, body: { ok: true, apiVersion: API_VERSION } };
+
+      if (req.method === "GET" && route === "/audit") return { status: 200, body: { entries: audit?.recent(Math.min(Number(req.query.get("limit") ?? 200) || 200, 1000)) ?? [] } };
 
       const list = /^\/mailboxes\/([^/]+)\/mails$/.exec(route);
       if (req.method === "GET" && list) {

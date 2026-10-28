@@ -26,6 +26,14 @@ export const settingsSchema = z.object({
   /** Aliases, one `name=label` or `name=label=value` per line: `@name` addresses the agent holding that label. */
   aliases: z.string().default("assistant=paseo.assistant=1\nsupervisor=paseo.factory.supervisor=1"),
 
+  /**
+   * Who may follow (read, mark read, be woken for) mailboxes other than their own, one rule per line:
+   * `<@alias or label key=value> = <@user|@alias>[, ...] [: read|mark|wake ...]`, for example `@assistant = @user : read+mark, wake`.
+   * Empty by default: nobody follows anything.
+   */
+  followGrants: z.string().default(""),
+  auditRetentionDays: z.number().min(1).default(90),
+
   /** The milestone rule: new top-level agents matching it are told to mail `milestoneTo`, if it resolves to an agent. Empty `milestoneTo` turns it off. */
   milestoneTo: z.string().default("@assistant"),
   milestoneIncludeLabels: z.string().default("paseo.factory.supervisor=1"),
