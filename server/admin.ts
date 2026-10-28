@@ -4,7 +4,7 @@ import { API_VERSION, MAX_BODY_BYTES, type Mail } from "../shared/mail";
 import { AddressError } from "./address";
 import type { AuditLog } from "./follow";
 import { LimitError } from "./limits";
-import { UsageError, type MailService } from "./service";
+import { UsageError, type MailService, type Sender } from "./service";
 import type { MailStore } from "./store";
 
 type Reply = { status: number; body: unknown };
@@ -59,7 +59,13 @@ export function adminApi(service: MailService, store: MailStore, humanName: () =
       }
       if (req.method === "POST" && route === "/mails") {
         const body = sendSchema.parse(req.body);
-        const from = body.asAgent ? { type: "agent" as const, ...body.asAgent } : { type: "human" as const, name: humanName() };
+        // An asAgent that is not a known agent is a system sender (the Events and Factory plugins mail as "events"/"factory"):
+        // it needs no agent lookup, and nobody can reply to it. Agent tool calls still require a known agent.
+        const from: Sender = !body.asAgent
+          ? { type: "human", name: humanName() }
+          : (await service.isAgent(body.asAgent.agentId))
+            ? { type: "agent", ...body.asAgent }
+            : { type: "system", name: body.asAgent.name };
         const { mail, resolved } = await service.send(from, body);
         return { status: 200, body: { id: mail.id, threadId: mail.threadId, to: resolved.display } };
       }

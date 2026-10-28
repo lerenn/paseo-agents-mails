@@ -118,7 +118,19 @@ describe("admin API", () => {
     const ok = await api("/api/mails", { method: "POST", body: JSON.stringify({ to: "@assistant", subject: "done", kind: "done", asAgent: { agentId: "aaaaaaaa-1", name: "Coder A" } }) });
     expect(ok.status).toBe(200);
     const bad = await api("/api/mails", { method: "POST", body: JSON.stringify({ to: "@assistant", subject: "x", asAgent: { agentId: "gone", name: "G" } }) });
-    expect(bad.status).toBe(422);
+    expect(bad.status).toBe(200);
+  });
+
+  it("mails as a system sender (asAgent that is not an agent), to an alias; an unknown MCP caller still fails", async () => {
+    const { api, t } = await boot();
+    const sent = await api("/api/mails", { method: "POST", body: JSON.stringify({ to: "@assistant", subject: "Event fired", asAgent: { agentId: "events", name: "Events" } }) });
+    expect(sent.status).toBe(200);
+    const box = await api("/api/mailboxes/alias%3Aassistant/mails");
+    expect(box.json.mails).toHaveLength(1);
+    expect(box.json.mails[0].from).toMatchObject({ type: "system", name: "Events" });
+    const mailId = box.json.mails[0].id;
+    await expect(t.service.reply({ type: "agent", agentId: "cccccccc-3", name: "A" }, mailId, "hi")).rejects.toThrow(/nobody to reply to/);
+    await expect(t.service.send({ type: "agent", agentId: "events", name: "Events" }, { to: "@assistant", subject: "x" })).rejects.toThrow(/not known to Paseo/);
   });
 });
 

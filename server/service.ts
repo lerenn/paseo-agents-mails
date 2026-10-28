@@ -64,6 +64,11 @@ export class MailService {
     return found;
   }
 
+  /** Whether the id is a live agent of the daemon (used to tell a system sender from an agent). */
+  async isAgent(agentId: string): Promise<boolean> {
+    return !!((await this.p.directory.list()).find((a) => a.id === agentId) ?? (await this.p.directory.fresh(agentId)));
+  }
+
   async mailboxes(agentId: string): Promise<string[]> {
     const agent = await this.caller(agentId).catch(() => null);
     return agent ? mailboxesOf(agent, await this.p.directory.list(), this.book(await this.p.directory.list())) : [agentMailbox(agentId)];

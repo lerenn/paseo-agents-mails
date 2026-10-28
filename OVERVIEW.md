@@ -32,7 +32,7 @@ Subject 200 characters, body 16 KB, 30 mails per sender per 10 minutes, 10 per s
 
 ## Admin API (for other plugins)
 
-`~/.paseo/agents-mail/endpoint.json` (mode 0600) holds `{ url, token, apiVersion: 1 }`; use the token as a bearer. `GET /api/health`; `GET /api/mailboxes/<id>/mails?unreadOnly=&limit=` (`<id>` is `alias:assistant` or `agent:<id>`, URL-encoded); `POST /api/mails/read` `{ mailbox, ids? }`; `POST /api/mails` `{ to, subject, body, kind, asAgent?: { agentId, name } }` (the human sends when `asAgent` is omitted); `POST /api/import` `{ mailbox, mails: [{ id, agentId, agentName, subject, body, kind, at, read }] }` (idempotent, ids become `legacy:<id>`). A plugin that cannot find the file or gets no answer treats Agents Mail as not installed.
+`~/.paseo/agents-mail/endpoint.json` (mode 0600) holds `{ url, token, apiVersion: 1 }`; use the token as a bearer. `GET /api/health`; `GET /api/mailboxes/<id>/mails?unreadOnly=&limit=` (`<id>` is `alias:assistant` or `agent:<id>`, URL-encoded); `POST /api/mails/read` `{ mailbox, ids? }`; `POST /api/mails` `{ to, subject, body, kind, asAgent?: { agentId, name } }` (the human sends when `asAgent` is omitted; an `asAgent` whose `agentId` is not a known agent, such as `events` or `factory`, sends as a **system** sender named `name`: no agent lookup, alias addresses resolve as usual, and nobody can reply to it; agent tool calls still need a known agent); `POST /api/import` `{ mailbox, mails: [{ id, agentId, agentName, subject, body, kind, at, read }] }` (idempotent, ids become `legacy:<id>`). A plugin that cannot find the file or gets no answer treats Agents Mail as not installed.
 
 ## Environment
 
