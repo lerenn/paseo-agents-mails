@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { WakeEngine, wakeable } from "../server/wake";
+import { describe, expect, it, vi } from "vitest";
+import { CONFIRM_WINDOW_MS, FAIL_RESET_MS, RESUME_WAIT_MS, WakeEngine, isAmbiguousSendFailure, wakeable } from "../server/wake";
+import type { AgentInfo } from "../server/agents";
 import { agent, setup } from "../server/testing";
 
 const A = { type: "agent" as const, agentId: "aaaaaaaa-1", name: "Coder A" };
 
-function rig(opts: { tools?: boolean; live?: boolean; settings?: Parameters<typeof setup>[1] } = {}) {
+function rig(opts: { tools?: boolean; live?: boolean; settings?: Parameters<typeof setup>[1]; resume?: (agent: AgentInfo) => Promise<void> } = {}) {
   const t = setup([agent("aaaaaaaa-1"), agent("bbbbbbbb-2")], { sendsPer10Minutes: 1000, pairSendsPer10Minutes: 1000, ...opts.settings });
   const wake = new WakeEngine({
     now: () => t.clock.now,
@@ -19,6 +20,8 @@ function rig(opts: { tools?: boolean; live?: boolean; settings?: Parameters<type
     injectEnabledFor: () => true,
     recordWake: (ids, at) => t.store.recordWake(ids, at),
     markInline: (_a, ids, at) => void t.store.markRead(["agent:bbbbbbbb-2"], ids, "inline", at),
+    resume: opts.resume,
+    resumeQuickMs: 20,
   });
   const send = async (subject = "hi", body = "") => {
     const r = await t.service.send(A, { to: "bbbbbbbb-2", subject, body });
@@ -175,5 +178,135 @@ describe("wake", () => {
     await send();
     t.clock.now += 30_000;
     expect(await wake.sweep()).toEqual([]);
+  });
+
+  describe("ambiguous sends", () => {
+    const timeout = () => new Error("Timeout waiting for message (60000ms)");
+
+    it("classes daemon timeouts as ambiguous, plain errors as failures", () => {
+      expect(isAmbiguousSendFailure(timeout())).toBe(true);
+      expect(isAmbiguousSendFailure(new Error("socket hang up"))).toBe(true);
+      expect(isAmbiguousSendFailure(new Error("Agent not found"))).toBe(false);
+    });
+
+    it("a timeout followed by a turn start counts as delivered, with no resend and no backoff", async () => {
+      const { t, wake, send } = rig();
+      await send();
+      t.clock.now += 30_000;
+      t.directory.sendError = timeout();
+      expect(await wake.sweep()).toEqual([]);
+      expect(t.store.list(["agent:bbbbbbbb-2"])[0].wakes).toBe(0);
+      t.directory.sendError = null;
+      // While unconfirmed, nothing is sent again.
+      t.clock.now += 60_000;
+      expect(await wake.sweep()).toEqual([]);
+      expect(t.directory.sent).toHaveLength(0);
+      wake.turnStarted("bbbbbbbb-2", t.clock.now);
+      expect(await wake.sweep()).toEqual(["bbbbbbbb-2"]);
+      expect(t.store.list(["agent:bbbbbbbb-2"])[0].wakes).toBe(1);
+      expect(t.directory.sent).toHaveLength(0);
+    });
+
+    it("a timeout followed by newer activity or a running status counts as delivered", async () => {
+      const { t, wake, send } = rig();
+      await send();
+      t.clock.now += 30_000;
+      t.directory.sendError = timeout();
+      await wake.sweep();
+      t.directory.sendError = null;
+      t.directory.agents[1] = { ...t.directory.agents[1], lastActivityAt: t.clock.now + 1 };
+      t.clock.now += 5_000;
+      expect(await wake.sweep()).toEqual(["bbbbbbbb-2"]);
+      expect(t.store.list(["agent:bbbbbbbb-2"])[0].wakes).toBe(1);
+    });
+
+    it("a timeout with no turn in the window counts as a failure and is retried after the backoff", async () => {
+      const { t, wake, send } = rig();
+      await send();
+      t.clock.now += 30_000;
+      t.directory.sendError = timeout();
+      await wake.sweep();
+      t.directory.sendError = null;
+      t.clock.now += CONFIRM_WINDOW_MS - 1_000;
+      expect(await wake.sweep()).toEqual([]);
+      t.clock.now += 2_000;
+      expect(await wake.sweep()).toEqual([]); // the window closed: a failure, first backoff (1 min)
+      expect(t.directory.sent).toHaveLength(0);
+      t.clock.now += 30_000;
+      expect(await wake.sweep()).toEqual([]);
+      t.clock.now += 31_000;
+      expect(await wake.sweep()).toEqual(["bbbbbbbb-2"]);
+      expect(t.directory.sent).toHaveLength(1);
+      expect(t.store.unreadCount("agent:bbbbbbbb-2")).toBe(1);
+    });
+
+    it("drops the confirmation when the mail is read meanwhile", async () => {
+      const { t, wake, send } = rig();
+      const mail = await send();
+      t.clock.now += 30_000;
+      t.directory.sendError = timeout();
+      await wake.sweep();
+      t.directory.sendError = null;
+      t.store.markRead(["agent:bbbbbbbb-2"], [mail.id], "tool", t.clock.now);
+      await wake.sweep();
+      await send("next");
+      t.clock.now += CONFIRM_WINDOW_MS + 60_000;
+      expect(await wake.sweep()).toEqual(["bbbbbbbb-2"]);
+      expect(t.directory.sent).toHaveLength(1);
+    });
+  });
+
+  it("resets the failure count after a quiet period", async () => {
+    const { t, wake, send } = rig();
+    await send();
+    t.clock.now += 30_000;
+    t.directory.failSend = true;
+    await wake.sweep(); // 1st failure: 1 min
+    t.clock.now += 61_000;
+    await wake.sweep(); // 2nd: 5 min
+    t.clock.now += 5 * 60_000 + 1_000;
+    await wake.sweep(); // 3rd: 15 min
+    t.clock.now += FAIL_RESET_MS;
+    await wake.sweep(); // quiet for 30 min: counts as a 1st failure again, 1 min
+    t.directory.failSend = false;
+    t.clock.now += 61_000;
+    expect(await wake.sweep()).toEqual(["bbbbbbbb-2"]);
+  });
+
+  describe("suspended pods", () => {
+    it("resumes the pod before sending", async () => {
+      const order: string[] = [];
+      const { t, wake, send } = rig({ resume: async (a) => void order.push(`resume ${a.id}`) });
+      await send();
+      t.clock.now += 30_000;
+      expect(await wake.sweep()).toEqual(["bbbbbbbb-2"]);
+      expect(order).toEqual(["resume bbbbbbbb-2"]);
+      expect(t.directory.sent).toHaveLength(1);
+    });
+
+    it("does not hold the sweep on a slow resume; sends once the pod is ready", async () => {
+      let ready!: () => void;
+      const resume = vi.fn(() => new Promise<void>((r) => (ready = r)));
+      const { t, wake, send } = rig({ resume });
+      await send();
+      t.clock.now += 30_000;
+      expect(await wake.sweep()).toEqual([]);
+      t.clock.now += 5_000;
+      expect(await wake.sweep()).toEqual([]); // still resuming, no second resume, no failure
+      expect(resume).toHaveBeenCalledTimes(1);
+      expect(t.directory.sent).toHaveLength(0);
+      ready();
+      await vi.waitFor(() => expect(t.directory.sent).toHaveLength(1)); // poked when the resume settles
+      expect(t.store.list(["agent:bbbbbbbb-2"])[0].wakes).toBe(1);
+    });
+
+    it("sends anyway when the resume takes longer than the bound", async () => {
+      const { t, wake, send } = rig({ resume: () => new Promise<void>(() => undefined) });
+      await send();
+      t.clock.now += 30_000;
+      expect(await wake.sweep()).toEqual([]);
+      t.clock.now += RESUME_WAIT_MS;
+      expect(await wake.sweep()).toEqual(["bbbbbbbb-2"]);
+    });
   });
 });
