@@ -25,6 +25,8 @@ export const agent = (id: string, o: Partial<AgentInfo> = {}): AgentInfo => ({
 export class FakeDirectory implements Directory {
   sent: { id: string; text: string }[] = [];
   failSend = false;
+  /** Throw this from send instead (e.g. a daemon timeout). */
+  sendError: Error | null = null;
   /** Pretend the host skipped the send because the agent started a turn. */
   skipSend = false;
   constructor(public agents: AgentInfo[]) {}
@@ -35,6 +37,7 @@ export class FakeDirectory implements Directory {
     return this.agents.find((a) => a.id === id && !a.archived) ?? null;
   }
   async send(id: string, text: string) {
+    if (this.sendError) throw this.sendError;
     if (this.failSend) throw new Error("send failed");
     if (this.skipSend) return false;
     this.sent.push({ id, text });

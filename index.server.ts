@@ -17,6 +17,7 @@ import { MailService } from "./server/service";
 import { MailStore } from "./server/store";
 import { CapabilityStore } from "./server/tokens";
 import { USAGE, mailTools, toolNames } from "./server/tools";
+import { podResumer } from "./server/pods";
 import { WakeEngine } from "./server/wake";
 
 const DEFAULT_PORT = 47843;
@@ -134,6 +135,8 @@ export default function contribute(server: PluginServerContext) {
     markInline: (agentId, ids, at) => {
       void service.mailboxes(agentId).then((boxes) => store.markRead(boxes, ids, "inline", at));
     },
+    // A suspended Kubernetes Runtime pod is resumed before the wake, so the prompt does not sit behind a pod boot.
+    resume: podResumer(),
   });
   wake.start();
 
@@ -261,6 +264,10 @@ export default function contribute(server: PluginServerContext) {
     // No agent.prompt hook on this host.
   }
 
+  const removeTurnStarted = server.on("agent.turn_started", ({ agent }, ctx) => {
+    capture(ctx);
+    wake.turnStarted(agent.id);
+  });
   const removeTurnEnded = server.on("agent.turn_ended", ({ agent }, ctx) => {
     capture(ctx);
     // Give the status a moment to settle to idle, then wake if mail is waiting.
@@ -285,6 +292,7 @@ export default function contribute(server: PluginServerContext) {
     removeCreate();
     removeOpen();
     removePrompt();
+    removeTurnStarted();
     removeTurnEnded();
     removeCreated();
     removeArchived();

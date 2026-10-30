@@ -9,6 +9,39 @@ import { cleanName, renderBlock } from "./render";
 const REWAKE_MS = [0, 5 * 60_000, 30 * 60_000];
 const HARD_CAP_MS = 2 * 60_000;
 const FAIL_BACKOFF_MS = [60_000, 5 * 60_000, 15 * 60_000];
+/** With no failure for this long, the failure count starts again from zero (a bad morning does not carry into the next). */
+export const FAIL_RESET_MS = 30 * 60_000;
+/**
+ * How long a send that ended ambiguously (a timeout: the host may still deliver it) waits for proof of a turn before it
+ * counts as failed. The Kubernetes Runtime may hold a prompt up to 14 min while it resumes a pod.
+ */
+export const CONFIRM_WINDOW_MS = 15 * 60_000;
+/** How long a wake waits for a suspended pod to resume before it sends anyway (the send then waits in the runtime). */
+export const RESUME_WAIT_MS = 5 * 60_000;
+/** How long a resume call may take before the wake stops blocking the sweep on it and comes back when it is done. */
+const RESUME_QUICK_MS = 3_000;
+/** A finished resume is trusted for this long; after that the pod may have been suspended again. */
+const RESUME_FRESH_MS = 60_000;
+
+/**
+ * True when a failed send may still have been delivered: the daemon request timed out, or the connection dropped after the
+ * request went out. Paseo classes these the same way (isAmbiguousPromptFailure in its host operations).
+ */
+export function isAmbiguousSendFailure(error: unknown): boolean {
+  const message = String((error as Error)?.message ?? error);
+  return /time(d)?\s*out|timeout|ETIMEDOUT|ECONNRESET|socket hang up|connection (closed|lost|reset)|disconnected/i.test(message);
+}
+
+/** A send that ended ambiguously, waiting for a sign that the recipient started a turn. */
+interface Unconfirmed {
+  sentAt: number;
+  mailIds: string[];
+  threadIds: string[];
+  inlineIds: string[];
+  /** The agent's status and last activity right before the send. */
+  statusBefore: string;
+  activityBefore: number;
+}
 
 export interface WakePorts {
   now: () => number;
@@ -27,6 +60,13 @@ export interface WakePorts {
   recordWake: (ids: string[], at: number) => void;
   /** Marks mails shown inline in a wake as read. */
   markInline: (agentId: string, ids: string[], at: number) => void;
+  /**
+   * Resumes the agent's pod if it is suspended and resolves once it is ready (or at once when there is nothing to resume).
+   * Absent when no runtime offers pod control.
+   */
+  resume?: (agent: AgentInfo) => Promise<void>;
+  /** Tests only: how long a resume may block the wake (default 3 s). */
+  resumeQuickMs?: number;
 }
 
 /** True when the agent can take a prompt now without interrupting anything. */
@@ -46,7 +86,10 @@ export class WakeEngine {
   private readonly lastMailAt = new Map<string, number>();
   private readonly firstSeenAt = new Map<string, number>();
   private readonly lastWakeAt = new Map<string, number>();
-  private readonly failures = new Map<string, { count: number; until: number }>();
+  private readonly failures = new Map<string, { count: number; until: number; lastAt: number }>();
+  private readonly unconfirmed = new Map<string, Unconfirmed>();
+  private readonly turnStartedAt = new Map<string, number>();
+  private readonly resumes = new Map<string, { startedAt: number; settledAt: number | null }>();
   private readonly threadWakes = new Map<string, number[]>();
   private globalWakes: number[] = [];
   private inflight = new Set<string>();
@@ -59,6 +102,11 @@ export class WakeEngine {
     if (!holderId) return;
     this.lastMailAt.set(holderId, at);
     if (!this.firstSeenAt.has(holderId)) this.firstSeenAt.set(holderId, at);
+  }
+
+  /** The agent started a turn (`agent.turn_started`): proof that an ambiguous send went through. */
+  turnStarted(agentId: string, at = this.p.now()): void {
+    this.turnStartedAt.set(agentId, at);
   }
 
   start(everyMs = 5_000): void {
@@ -74,7 +122,10 @@ export class WakeEngine {
     const s = this.p.settings();
     if (!s.enabled || !s.wakeEnabled) return [];
     const woken: string[] = [];
-    for (const { agentId, mails, followed } of await this.p.pending()) {
+    const pending = await this.p.pending();
+    // An ambiguous send whose mail was read meanwhile needs no confirmation: reading it is the proof.
+    for (const id of this.unconfirmed.keys()) if (!pending.some((e) => e.agentId === id)) this.unconfirmed.delete(id);
+    for (const { agentId, mails, followed } of pending) {
       if (await this.tryWake(agentId, mails, s, followed)) woken.push(agentId);
     }
     return woken;
@@ -93,7 +144,9 @@ export class WakeEngine {
     const last = this.lastMailAt.get(agentId) ?? Math.max(...mails.map((m) => m.createdAt));
     if (now - last < s.wakeDebounceSeconds * 1000 && now - first < HARD_CAP_MS) return [];
     if (now - (this.lastWakeAt.get(agentId) ?? 0) < s.wakeMinGapMinutes * 60_000) return [];
-    if (now < (this.failures.get(agentId)?.until ?? 0)) return [];
+    const failed = this.failures.get(agentId);
+    if (failed && now - failed.lastAt >= FAIL_RESET_MS) this.failures.delete(agentId);
+    else if (failed && now < failed.until) return [];
     return mails.filter((m) => m.wakes < REWAKE_MS.length && (m.wakes === 0 || now - (m.lastWokeAt ?? 0) >= REWAKE_MS[m.wakes]));
   }
 
@@ -103,6 +156,7 @@ export class WakeEngine {
     const followed = this.p.hasTools(agentId) ? followedAll : [];
     const mails = [...own, ...followed];
     if (this.inflight.has(agentId) || mails.length === 0) return false;
+    if (this.unconfirmed.has(agentId)) return this.confirm(agentId);
     const now = this.p.now();
     let dueMails = this.due(agentId, mails, s, now);
     // A thread that keeps waking its parties cools down.
@@ -116,32 +170,129 @@ export class WakeEngine {
       // The decision is made on a fresh read, right before the send.
       const agent = await this.p.fresh(agentId);
       if (!agent || !wakeable(agent, s.wakeClosedAgents)) return false;
+      if (!(await this.awake(agent))) return false;
       const dueFollowed = followed.filter((m) => dueMails.some((d) => d.id === m.id));
       const dueOwn = own.filter((m) => dueMails.some((d) => d.id === m.id));
       const text = this.text(agent, dueOwn, s, now, dueFollowed);
+      const sentAt = this.p.now();
       try {
         const delivered = await this.p.send(agentId, text.body);
         // The agent started a turn between the check and the send: nothing went out, so this is not a wake. The next
         // turn_ended or sweep tries again.
         if (delivered === false) return false;
-        this.globalWakes.push(now);
-        this.lastWakeAt.set(agentId, now);
       } catch (error) {
-        const count = (this.failures.get(agentId)?.count ?? 0) + 1;
-        this.failures.set(agentId, { count, until: now + FAIL_BACKOFF_MS[Math.min(count, FAIL_BACKOFF_MS.length) - 1] });
+        if (isAmbiguousSendFailure(error)) {
+          // Maybe delivered: the host may still hand the prompt over (a pod resuming behind it). Nothing is recorded and no
+          // backoff starts; the next sweeps look for a turn, and only if none shows up is it a failure.
+          this.globalWakes.push(now);
+          this.unconfirmed.set(agentId, {
+            sentAt,
+            mailIds: dueMails.map((m) => m.id),
+            threadIds: dueMails.map((m) => m.threadId),
+            inlineIds: text.inlineIds,
+            statusBefore: agent.status,
+            activityBefore: agent.lastActivityAt,
+          });
+          console.warn(`agents-mail: wake of ${agentId} may not have been delivered; waiting for a turn`, error);
+          return false;
+        }
+        this.fail(agentId, now);
         console.error(`agents-mail: wake of ${agentId} failed`, error);
         return false;
       }
-      this.failures.delete(agentId);
-      const at = this.p.now();
-      this.p.recordWake(dueMails.map((m) => m.id), at);
-      for (const m of dueMails) this.threadWakes.set(m.threadId, [...(this.threadWakes.get(m.threadId) ?? []), at]);
-      if (text.inlineIds.length) this.p.markInline(agentId, text.inlineIds, at);
-      this.firstSeenAt.delete(agentId);
+      this.globalWakes.push(now);
+      this.delivered(agentId, now, dueMails.map((m) => m.id), dueMails.map((m) => m.threadId), text.inlineIds);
       return true;
     } finally {
       this.inflight.delete(agentId);
     }
+  }
+
+  private fail(agentId: string, now: number): void {
+    const count = (this.failures.get(agentId)?.count ?? 0) + 1;
+    this.failures.set(agentId, { count, until: now + FAIL_BACKOFF_MS[Math.min(count, FAIL_BACKOFF_MS.length) - 1], lastAt: now });
+  }
+
+  /** The bookkeeping of a wake that went out. */
+  private delivered(agentId: string, wokeAt: number, mailIds: string[], threadIds: string[], inlineIds: string[]): void {
+    this.lastWakeAt.set(agentId, wokeAt);
+    this.failures.delete(agentId);
+    const at = this.p.now();
+    this.p.recordWake(mailIds, at);
+    for (const t of threadIds) this.threadWakes.set(t, [...(this.threadWakes.get(t) ?? []), at]);
+    if (inlineIds.length) this.p.markInline(agentId, inlineIds, at);
+    this.firstSeenAt.delete(agentId);
+  }
+
+  /**
+   * Settles an ambiguous send: delivered once the agent shows a turn after it (a `turn_started`, status `running`, newer
+   * activity, or a status change other than going idle), failed once the window passes without one. True when it counts as
+   * a wake now.
+   */
+  private async confirm(agentId: string): Promise<boolean> {
+    const u = this.unconfirmed.get(agentId)!;
+    this.inflight.add(agentId);
+    try {
+      const agent = await this.p.fresh(agentId);
+      const turned =
+        (this.turnStartedAt.get(agentId) ?? 0) >= u.sentAt ||
+        (agent !== null &&
+          (agent.status === "running" || agent.lastActivityAt > Math.max(u.activityBefore, u.sentAt) || (agent.status !== u.statusBefore && agent.status !== "idle")));
+      if (turned) {
+        this.unconfirmed.delete(agentId);
+        this.delivered(agentId, u.sentAt, u.mailIds, u.threadIds, u.inlineIds);
+        return true;
+      }
+      const now = this.p.now();
+      if (agent && now - u.sentAt < CONFIRM_WINDOW_MS) return false;
+      this.unconfirmed.delete(agentId);
+      this.fail(agentId, now);
+      console.error(`agents-mail: wake of ${agentId} timed out and no turn followed; it will be retried`);
+      return false;
+    } finally {
+      this.inflight.delete(agentId);
+    }
+  }
+
+  /**
+   * Makes sure the agent's pod is up before the send. A resume that is quick (or a pod already running) lets the send go
+   * now; a slow one keeps going in the background and the agent is poked when it is done, so one suspended pod never holds
+   * up the sweep. After RESUME_WAIT_MS the wake sends anyway. False: not now, nothing failed.
+   */
+  private async awake(agent: AgentInfo): Promise<boolean> {
+    if (!this.p.resume) return true;
+    const now = this.p.now();
+    const r = this.resumes.get(agent.id);
+    if (r && r.settledAt === null) {
+      if (now - r.startedAt < RESUME_WAIT_MS) return false;
+      this.resumes.delete(agent.id);
+      return true;
+    }
+    if (r && r.settledAt !== null && now - r.settledAt < RESUME_FRESH_MS) {
+      this.resumes.delete(agent.id);
+      return true;
+    }
+    const entry: { startedAt: number; settledAt: number | null } = { startedAt: now, settledAt: null };
+    this.resumes.set(agent.id, entry);
+    const job = this.p.resume(agent).catch((error) => console.warn(`agents-mail: resume before waking ${agent.id} failed`, error));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const quick = await Promise.race([
+      job.then(() => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), this.p.resumeQuickMs ?? RESUME_QUICK_MS);
+        (timer as { unref?: () => void }).unref?.();
+      }),
+    ]).finally(() => clearTimeout(timer));
+    if (quick) {
+      this.resumes.delete(agent.id);
+      return true;
+    }
+    void job.then(() => {
+      if (this.resumes.get(agent.id) !== entry) return;
+      entry.settledAt = this.p.now();
+      void this.poke(agent.id).catch((e) => console.error("agents-mail: poke after resume failed", e));
+    });
+    return false;
   }
 
   /**

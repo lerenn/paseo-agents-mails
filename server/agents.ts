@@ -1,6 +1,8 @@
 /** What Agents Mail needs to know about an agent; built from a Paseo agent snapshot. */
 export interface AgentInfo {
   id: string;
+  /** The Paseo workspace (the pod, under the Kubernetes Runtime). */
+  workspaceId?: string;
   title: string | null;
   labels: Record<string, string>;
   /** Native subagent link (snapshot field): the only thing that restricts addressing. */
@@ -83,6 +85,7 @@ export function fromSnapshot(agent: unknown): AgentInfo | null {
   const labels = (a.labels as Record<string, string> | undefined) ?? {};
   return {
     id: a.id,
+    ...(typeof a.workspaceId === "string" ? { workspaceId: a.workspaceId } : {}),
     title: typeof a.title === "string" ? a.title : null,
     labels,
     parentAgentId: typeof a.parentAgentId === "string" ? a.parentAgentId : null,
