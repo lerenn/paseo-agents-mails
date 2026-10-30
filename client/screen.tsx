@@ -17,23 +17,23 @@ export function useMailboxes() {
   return useQuery({ queryKey: BOXES_KEY, queryFn: () => list({}), refetchInterval: REFRESH_MS });
 }
 
-function UnreadBadge({ text }: { text: string }) {
+function UnreadBadge({ theme, text }: { theme: PluginTheme; text: string }) {
   return (
-    <View accessibilityLabel={`${text} unread`} style={{ minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 5, alignItems: "center", justifyContent: "center", backgroundColor: "#d33" }}>
-      <Text style={{ color: "#fff", fontSize: 11, fontWeight: "600" }}>{text}</Text>
+    <View accessibilityLabel={`${text} unread`} style={{ minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 5, alignItems: "center", justifyContent: "center", backgroundColor: theme.colors.accent }}>
+      <Text style={{ color: theme.colors.accentForeground, fontSize: 11, fontWeight: "600" }}>{text}</Text>
     </View>
   );
 }
 
 /** The sidebar row: a mail icon and the total unread count. */
-export function MailSidebarItem({ currentScreen, openScreen }: PluginSidebarItemProps) {
+export function MailSidebarItem({ theme, currentScreen, openScreen }: PluginSidebarItemProps) {
   const unread = useMailboxes().data?.unread ?? 0;
   return (
     <SidebarRow
       icon="Mail"
       active={currentScreen?.screenId === SCREEN_ID}
       onPress={() => openScreen({ screenId: SCREEN_ID })}
-      trailing={unread > 0 ? <UnreadBadge text={badge(unread)} /> : undefined}
+      trailing={unread > 0 ? <UnreadBadge theme={theme} text={badge(unread)} /> : undefined}
     />
   );
 }
@@ -66,7 +66,7 @@ function MailboxList({ theme, boxes, selected, onSelect }: { theme: PluginTheme;
         <Pressable key={b.id} accessibilityRole="button" onPress={() => onSelect(b.id)} style={card(theme, { selected: b.id === selected, muted: b.archived })}>
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
             <Text style={{ color: theme.colors.foreground, fontSize: 14, fontWeight: b.unread ? "600" : "400", flexShrink: 1 }}>{b.label}</Text>
-            {b.kind === "human" && b.unread > 0 ? <UnreadBadge text={badge(b.unread)} /> : null}
+            {b.kind === "human" && b.unread > 0 ? <UnreadBadge theme={theme} text={badge(b.unread)} /> : null}
           </View>
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
             {b.kind === "human" ? "you" : b.holder ? `held by ${b.holder}` : "no holder (mail waits)"} · {b.total} mail{b.total === 1 ? "" : "s"}
